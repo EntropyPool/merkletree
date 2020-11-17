@@ -3,6 +3,7 @@ use std::io::{copy, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
+use std::mem;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -506,6 +507,42 @@ impl<E: Element> DiskStore<E> {
         Ok(read_data)
     }
 
+    /////////////////////////////////////////////////////////////////////////
+
+    pub fn read_range_ex(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
+        let start = r.start * self.elem_len;
+        let end = r.end * self.elem_len;
+
+        let len = self.len * self.elem_len;
+        ensure!(start < len, "start out of range {} >= {}", start, len);
+        ensure!(end <= len, "end out of range {} > {}", end, len);
+
+        Ok(self
+            .store_read_range_ex(start, end)?
+            .chunks(self.elem_len)
+            .map(E::from_slice)
+            .collect())
+    }
+
+    pub fn store_read_range_ex(&self, start: usize, end: usize) -> Result<Vec<u8>> {
+        let read_len = end - start;
+        //let mut read_data = vec![0; read_len];
+
+        let mut read_data;
+        unsafe {
+            let mmap = MmapOptions::new()
+                .offset( start as u64 )
+                .len( read_len )
+                .map(&(self.file))
+                .expect("failed to map layer file");
+            read_data = mmap.to_vec();
+        };
+
+
+        ensure!(read_data.len() == read_len, "Failed to read the full range");
+        Ok(read_data)
+    }
+    /////////////////////////////////////////////////////////////////////////
     pub fn store_read_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
         self.file
             .read_exact_at(start as u64, buf)
