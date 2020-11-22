@@ -3,7 +3,6 @@ use std::io::{copy, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
-use std::mem;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
 
@@ -528,7 +527,7 @@ impl<E: Element> DiskStore<E> {
         let read_len = end - start;
         //let mut read_data = vec![0; read_len];
 
-        let mut read_data;
+        let read_data;
         unsafe {
             let mmap = MmapOptions::new()
                 .offset( start as u64 )
