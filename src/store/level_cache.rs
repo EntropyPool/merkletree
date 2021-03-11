@@ -153,6 +153,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         // Store.
 
         let store_size = E::byte_len() * size;
+        let mut store_len = 0;
 
         let file = if !config.oss {
             if Path::new(&data_path).exists() {
@@ -166,13 +167,14 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
                 .create_new(true)
                 .open(data_path)?;
 
+            file.set_len(store_size as u64)?;
             file
         } else {
             // Stupid hack for I don't want to create another new function
+            store_len = size;
             tempfile()?
         };
 
-        file.set_len(store_size as u64)?;
         let leafs = get_merkle_tree_leafs(size, branches)?;
 
         ensure!(
@@ -187,7 +189,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let cache_index_start = store_size - cache_size;
 
         Ok(LevelCacheStore {
-            len: 0,
+            len: store_len,
             elem_len: E::byte_len(),
             file,
             data_width: leafs,

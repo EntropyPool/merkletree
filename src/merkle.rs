@@ -397,7 +397,7 @@ impl<
         );
 
         let tree_len = get_merkle_tree_len(leafs, branches)?;
-        ensure!(tree_len == data.len(), "Inconsistent tree data");
+        ensure!(tree_len == data.len(), "Inconsistent tree data {} != {}", tree_len, data.len());
 
         ensure!(
             is_merkle_tree_size_valid(leafs, branches),
