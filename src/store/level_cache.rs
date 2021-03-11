@@ -798,7 +798,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             };
         }
 
-        info!("read from store {:?} reader {:?} start {} len {}", self, self.reader, adjusted_start, read_len);
         if self.oss {
             read_from_oss(
                 adjusted_start,
@@ -813,17 +812,17 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                         adjusted_start
                     )
             })?;
-        } else {
-            self.file
-                .read_exact_at(adjusted_start as u64, &mut read_data)
-                .with_context(|| {
-                    format!(
-                        "failed to read {} bytes from file at offset {}",
-                        read_len, start
-                    )
-                })?;
+            return Ok(read_data);
         }
 
+        self.file
+            .read_exact_at(adjusted_start as u64, &mut read_data)
+            .with_context(|| {
+                format!(
+                    "failed to read {} bytes from file at offset {}",
+                    read_len, adjusted_start
+                )
+            })?;
         Ok(read_data)
     }
 
