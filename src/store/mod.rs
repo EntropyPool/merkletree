@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
 use log::info;
+use tempfile::tempfile;
 
 use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
@@ -45,29 +46,35 @@ pub struct ExternalReader<R: Read + Send + Sync> {
     pub offset: usize,
     pub source: R,
     pub path: String,
-    pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], source: &R) -> Result<usize>,
+    pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<usize>,
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
         info!("read start {} end {} from {:?}", start, end, self.path);
-        (self.read_fn)(start + self.offset, end + self.offset, buf, &self.source)
+        (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
     }
 }
 
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
-        let reader = OpenOptions::new().read(true).open(&replica_config.path)?;
-
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
-            source: reader,
+            source: tempfile()?,
             path: replica_config.path.as_path().display().to_string(),
-            read_fn: |start, end, buf: &mut [u8], reader: &std::fs::File| {
-                reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
-
+            read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
+                if oss {
+                    panic!("READ RANGE FROM OSS NOT IMPLEMENTED");
+                } else {
+                    let reader = OpenOptions::new().read(true).open(&path)?;
+                    reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
+                }
                 Ok(end - start)
             },
+            oss: replica_config.oss,
+            oss_config: replica_config.oss_config.clone(),
         })
     }
 

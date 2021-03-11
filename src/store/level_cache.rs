@@ -166,14 +166,13 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
                 .create_new(true)
                 .open(data_path)?;
 
-            file.set_len(store_size as u64)?;
-
             file
         } else {
             // Stupid hack for I don't want to create another new function
             tempfile()?
         };
 
+        file.set_len(store_size as u64)?;
         let leafs = get_merkle_tree_leafs(size, branches)?;
 
         ensure!(
