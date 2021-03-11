@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::info;
+use log::trace;
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
@@ -76,7 +76,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
     let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
     let mut rt = Runtime::new()?;
 
-    info!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
+    trace!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
     let (data, code) = rt.block_on(
         bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
     ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
@@ -95,7 +95,7 @@ impl ExternalReader<std::fs::File> {
                 if oss {
                     read_from_oss(start, end, buf, path, oss_config)?;
                 } else {
-                    info!("read from local: start {}, end {}, path {}", start, end, path);
+                    trace!("read from local: start {}, end {}, path {}", start, end, path);
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
                 }
@@ -421,7 +421,6 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
             .try_for_each(|&chunk_index| -> Result<()> {
                 let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
 
-                info!("read layer {} start {} end {}", level, chunk_index, chunk_size);
                 let chunk_nodes = {
                     // Read everything taking the lock once.
                     data_lock
