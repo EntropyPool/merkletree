@@ -20,6 +20,11 @@ use tempfile::tempfile;
 use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 
+use s3::bucket::Bucket;
+use s3::creds::Credentials;
+use s3::region::Region;
+use tokio::runtime::Runtime;
+
 /// Tree size (number of nodes) used as threshold to decide which build algorithm
 /// to use. Small trees (below this value) use the old build algorithm, optimized
 /// for speed rather than memory, allocating as much as needed to allow multiple
@@ -66,7 +71,23 @@ impl ExternalReader<std::fs::File> {
             path: replica_config.path.as_path().display().to_string(),
             read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
                 if oss {
-                    panic!("READ RANGE FROM OSS NOT IMPLEMENTED");
+                    let path_buf = PathBuf::from(path);
+                    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+                    let credentials = Credentials::new(
+                        Some(&oss_config.access_key),
+                        Some(&oss_config.secret_key),
+                        None, None, None)?;
+                    let region = Region::Custom {
+                        region: "us-west-2".to_string(),
+                        endpoint: oss_config.url.clone(),
+                    };
+                    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
+                    let mut rt = Runtime::new()?;
+
+                    let (data, code) = rt.block_on(
+                        bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
+                    ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
+                    buf.copy_from_slice(&data[0..]);
                 } else {
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
