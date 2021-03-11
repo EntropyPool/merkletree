@@ -87,7 +87,7 @@ impl ExternalReader<std::fs::File> {
                     let (data, code) = rt.block_on(
                         bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
                     ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
-                    buf.copy_from_slice(&data[0..]);
+                    buf.copy_from_slice(&data[0..end - start]);
                 } else {
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
