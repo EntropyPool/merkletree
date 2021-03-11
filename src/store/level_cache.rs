@@ -54,7 +54,7 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
     // If provided, the store will use this method to access base
     // layer data.
     reader: Option<ExternalReader<R>>,
-    
+
     path: String,
 
     _e: PhantomData<E>,
@@ -147,23 +147,33 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
 
         let path = data_path.as_path().display().to_string();
-        info!("new level cache with config {}", path);
 
         // If the specified file exists, load it from disk.  This is
         // the only supported usage of this call for this type of
         // Store.
-        if Path::new(&data_path).exists() {
-            return Self::new_from_disk(size, branches, &config);
-        }
-
-        // Otherwise, create the file and allow it to be the on-disk store.
-        let file = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .create_new(true)
-            .open(data_path)?;
 
         let store_size = E::byte_len() * size;
+
+        let file = if !config.oss {
+            if Path::new(&data_path).exists() {
+                return Self::new_from_disk(size, branches, &config);
+            }
+
+            // Otherwise, create the file and allow it to be the on-disk store.
+            let file = OpenOptions::new()
+                .write(true)
+                .read(true)
+                .create_new(true)
+                .open(data_path)?;
+
+            file.set_len(store_size as u64)?;
+
+            file
+        } else {
+            // Stupid hack for I don't want to create another new function
+            tempfile()?
+        };
+
         let leafs = get_merkle_tree_leafs(size, branches)?;
 
         ensure!(
@@ -176,8 +186,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let cache_size =
             get_merkle_tree_cache_size(leafs, branches, config.rows_to_discard)? * E::byte_len();
         let cache_index_start = store_size - cache_size;
-
-        file.set_len(store_size as u64)?;
 
         Ok(LevelCacheStore {
             len: 0,
