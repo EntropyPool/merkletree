@@ -93,13 +93,13 @@ impl ExternalReader<std::fs::File> {
             path: replica_config.path.as_path().display().to_string(),
             read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
                 if oss {
-                    read_from_oss(start, end, buf, path, oss_config)
+                    read_from_oss(start, end, buf, path, oss_config)?;
                 } else {
                     info!("read from local: start {}, end {}, path {}", start, end, path);
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
-                    Ok(end - start)
                 }
+                Ok(end - start)
             },
             oss: replica_config.oss,
             oss_config: replica_config.oss_config.clone(),
