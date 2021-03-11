@@ -20,7 +20,7 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES};
+use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES, read_from_oss, StoreOssConfig};
 
 use s3::bucket::Bucket;
 use s3::creds::Credentials;
@@ -61,6 +61,10 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
     // layer data.
     reader: Option<ExternalReader<R>>,
 
+    oss: bool,
+    oss_config: StoreOssConfig,
+    path: String,
+
     _e: PhantomData<E>,
 }
 
@@ -86,6 +90,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         reader: ExternalReader<R>,
     ) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -132,6 +137,9 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: Some(reader),
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -146,6 +154,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
 impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         // If the specified file exists, load it from disk.  This is
         // the only supported usage of this call for this type of
@@ -191,6 +200,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -209,6 +221,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path: "tmp".to_string(),
             _e: Default::default(),
         })
     }
@@ -255,6 +270,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
 
     fn new_from_oss(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         info!("create store from oss for {:?}", data_path);
 
@@ -296,6 +312,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size: store_size as usize,
             reader: None,
+            oss: true,
+            oss_config: config.oss_config.clone(),
+            path,
             _e: Default::default(),
         })
     }
@@ -303,6 +322,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     // Used for opening v1 compacted DiskStores.
     fn new_from_disk(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -351,6 +371,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -775,30 +798,31 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             };
         }
 
-        if self.reader.is_some() {
-            self.reader
-                .as_ref()
-                .unwrap()
-                .read(adjusted_start, adjusted_start + read_len, &mut read_data)
+        info!("read from store {:?} reader {:?} start {} len {}", self, self.reader, adjusted_start, read_len);
+        if self.oss {
+            read_from_oss(
+                adjusted_start,
+                adjusted_start + read_len,
+                &mut read_data,
+                self.path.clone(),
+                &self.oss_config
+            ).with_context(|| {
+                format!("failed to read {} bytes from oss file {} at offset {}",
+                        read_len,
+                        self.path,
+                        adjusted_start
+                    )
+            })?;
+        } else {
+            self.file
+                .read_exact_at(adjusted_start as u64, &mut read_data)
                 .with_context(|| {
                     format!(
                         "failed to read {} bytes from file at offset {}",
-                        read_len,
-                        adjusted_start
+                        read_len, start
                     )
                 })?;
-
-            return Ok(read_data);
         }
-
-        self.file
-            .read_exact_at(adjusted_start as u64, &mut read_data)
-            .with_context(|| {
-                format!(
-                    "failed to read {} bytes from file at offset {}",
-                    read_len, start
-                )
-            })?;
 
         Ok(read_data)
     }

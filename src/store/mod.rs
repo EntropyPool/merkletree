@@ -62,6 +62,29 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
     }
 }
 
+pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<usize> {
+    let path_buf = PathBuf::from(path);
+    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+    let credentials = Credentials::new(
+        Some(&oss_config.access_key),
+        Some(&oss_config.secret_key),
+        None, None, None)?;
+    let region = Region::Custom {
+        region: "us-west-2".to_string(),
+        endpoint: oss_config.url.clone(),
+    };
+    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
+    let mut rt = Runtime::new()?;
+
+    info!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
+    let (data, code) = rt.block_on(
+        bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
+    ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
+    buf.copy_from_slice(&data[0..end - start]);
+
+    Ok(end - start)
+}
+
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
         Ok(ExternalReader {
@@ -70,29 +93,13 @@ impl ExternalReader<std::fs::File> {
             path: replica_config.path.as_path().display().to_string(),
             read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
                 if oss {
-                    let path_buf = PathBuf::from(path);
-                    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
-                    let credentials = Credentials::new(
-                        Some(&oss_config.access_key),
-                        Some(&oss_config.secret_key),
-                        None, None, None)?;
-                    let region = Region::Custom {
-                        region: "us-west-2".to_string(),
-                        endpoint: oss_config.url.clone(),
-                    };
-                    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
-                    let mut rt = Runtime::new()?;
-
-                    info!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
-                    let (data, code) = rt.block_on(
-                        bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
-                    ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
-                    buf.copy_from_slice(&data[0..end - start]);
+                    read_from_oss(start, end, buf, path, oss_config)
                 } else {
+                    info!("read from local: start {}, end {}, path {}", start, end, path);
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
+                    Ok(end - start)
                 }
-                Ok(end - start)
             },
             oss: replica_config.oss,
             oss_config: replica_config.oss_config.clone(),
