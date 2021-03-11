@@ -14,6 +14,8 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
+use log::info;
+
 use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 
@@ -42,11 +44,13 @@ pub use vec::VecStore;
 pub struct ExternalReader<R: Read + Send + Sync> {
     pub offset: usize,
     pub source: R,
+    pub path: String,
     pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], source: &R) -> Result<usize>,
 }
 
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
+        info!("read start {} end {} from {:?}", start, end, self.path);
         (self.read_fn)(start + self.offset, end + self.offset, buf, &self.source)
     }
 }
@@ -58,6 +62,7 @@ impl ExternalReader<std::fs::File> {
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
             source: reader,
+            path: replica_config.path.as_path().display().to_string(),
             read_fn: |start, end, buf: &mut [u8], reader: &std::fs::File| {
                 reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
 
@@ -94,9 +99,21 @@ pub enum StoreConfigDataVersion {
 const DEFAULT_STORE_CONFIG_DATA_VERSION: u32 = StoreConfigDataVersion::Two as u32;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct StoreOssConfig {
+    pub url: String,
+    pub landed_dir: PathBuf,
+    pub access_key: String,
+    pub secret_key: String,
+    pub bucket_name: String,
+    pub sector_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ReplicaConfig {
     pub path: PathBuf,
     pub offsets: Vec<usize>,
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl ReplicaConfig {
@@ -104,6 +121,26 @@ impl ReplicaConfig {
         ReplicaConfig {
             path: path.into(),
             offsets,
+            oss: false,
+            oss_config: Default::default(),
+        }
+    }
+
+    pub fn new_oss_config<T: Into<PathBuf>>(path: T, offsets: Vec<usize>, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        ReplicaConfig {
+            path: path.into(),
+            offsets,
+            oss,
+            oss_config: oss_config.clone(),
+        }
+    }
+
+    pub fn from_oss_config(path: &PathBuf, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        ReplicaConfig {
+            path: path.clone(),
+            offsets: vec![0],
+            oss,
+            oss_config: oss_config.clone(),
         }
     }
 }
@@ -113,6 +150,8 @@ impl From<&PathBuf> for ReplicaConfig {
         ReplicaConfig {
             path: path.clone(),
             offsets: vec![0],
+            oss: false,
+            oss_config: Default::default(),
         }
     }
 }
@@ -132,6 +171,9 @@ pub struct StoreConfig {
 
     /// The number of merkle tree rows_to_discard then cache on disk.
     pub rows_to_discard: usize,
+
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl StoreConfig {
@@ -141,6 +183,8 @@ impl StoreConfig {
             id: id.into(),
             size: None,
             rows_to_discard,
+            oss: false,
+            oss_config: Default::default(),
         }
     }
 
@@ -193,6 +237,8 @@ impl StoreConfig {
             id: id.into(),
             size: val,
             rows_to_discard: config.rows_to_discard,
+            oss: config.oss,
+            oss_config: config.oss_config.clone(),
         }
     }
 }
@@ -327,6 +373,7 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
             .try_for_each(|&chunk_index| -> Result<()> {
                 let chunk_size = std::cmp::min(BUILD_CHUNK_NODES, read_start + width - chunk_index);
 
+                info!("read layer {} start {} end {}", level, chunk_index, chunk_size);
                 let chunk_nodes = {
                     // Read everything taking the lock once.
                     data_lock

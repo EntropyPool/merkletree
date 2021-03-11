@@ -14,6 +14,7 @@ use rayon::iter::*;
 use rayon::prelude::*;
 use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
+use log::info;
 
 use crate::hash::Algorithm;
 use crate::merkle::{
@@ -53,6 +54,8 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
     // If provided, the store will use this method to access base
     // layer data.
     reader: Option<ExternalReader<R>>,
+    
+    path: String,
 
     _e: PhantomData<E>,
 }
@@ -79,6 +82,8 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         reader: ExternalReader<R>,
     ) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+
+        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -125,6 +130,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: Some(reader),
+            path: path,
             _e: Default::default(),
         })
     }
@@ -139,6 +145,9 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
 impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+
+        let path = data_path.as_path().display().to_string();
+        info!("new level cache with config {}", path);
 
         // If the specified file exists, load it from disk.  This is
         // the only supported usage of this call for this type of
@@ -179,6 +188,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            path: path,
             _e: Default::default(),
         })
     }
@@ -197,6 +207,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            path: "tmp".to_string(),
             _e: Default::default(),
         })
     }
@@ -245,6 +256,8 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_from_disk(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
 
+        let path = data_path.as_path().display().to_string();
+
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
@@ -292,6 +305,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size,
             reader: None,
+            path: path,
             _e: Default::default(),
         })
     }
@@ -789,6 +803,8 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             start <= self.data_width * self.elem_len || start >= self.cache_index_start,
             "Invalid read start"
         );
+
+        info!("read start {}, end {} from {:?}", start, end, self.path);
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {

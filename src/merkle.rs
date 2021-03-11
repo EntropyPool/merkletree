@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
-use log::debug;
+use log::{debug, info};
 use rayon::prelude::*;
 use typenum::marker_traits::Unsigned;
 use typenum::{U0, U2};
@@ -299,6 +299,8 @@ impl<
             let replica_sub_config = ReplicaConfig {
                 path: replica_config.path.clone(),
                 offsets: replica_config.offsets[start..end].to_vec(),
+                oss: replica_config.oss,
+                oss_config: replica_config.oss_config.clone(),
             };
             trees.push(MerkleTree::<
                 E,
@@ -1031,6 +1033,8 @@ impl<
         lemma.push(self.root());
         path.push(tree_index);
 
+        info!("lemma {:?}, path {:?}", lemma, path);
+
         // Generate the final compound tree proof which is composed of
         // a sub-tree proof of branching factor B and a top-level
         // proof with a branching factor of SubTreeArity.
@@ -1164,7 +1168,9 @@ impl<
                 let mut data_copy = vec![0; segment_width * E::byte_len()];
                 ensure!(self.data.store().is_some(), "store data required");
 
-                self.data.store().unwrap().read_range_into(
+                let store = self.data.store().unwrap();
+                info!("read start {}, end {} from sealed file store {:?}", segment_start, segment_end, store);
+                store.read_range_into(
                     segment_start,
                     segment_end,
                     &mut data_copy,
@@ -1461,7 +1467,9 @@ impl<
         ensure!(start < end, "start must be less than end");
         ensure!(self.data.store().is_some(), "store data required");
 
-        self.data.store().unwrap().read_range_into(start, end, buf)
+        let store = self.data.store().unwrap();
+        info!("read start {}, end {} from sealed file store {:?} 11111111111", start, end, store);
+        store.read_range_into(start, end, buf)
     }
 
     /// Reads into a pre-allocated slice (for optimization purposes).
