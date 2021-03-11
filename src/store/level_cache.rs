@@ -23,6 +23,11 @@ use crate::merkle::{
 };
 use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES};
 
+use s3::bucket::Bucket;
+use s3::creds::Credentials;
+use s3::region::Region;
+use tokio::runtime::Runtime;
+
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
 /// Each LevelCacheStore is created with a StoreConfig object which
@@ -153,28 +158,23 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         // Store.
 
         let store_size = E::byte_len() * size;
-        let mut store_len = 0;
 
-        let file = if !config.oss {
-            if Path::new(&data_path).exists() {
-                return Self::new_from_disk(size, branches, &config);
-            }
+        if config.oss {
+            return Self::new_from_oss(size, branches, &config);
+        }
 
-            // Otherwise, create the file and allow it to be the on-disk store.
-            let file = OpenOptions::new()
-                .write(true)
-                .read(true)
-                .create_new(true)
-                .open(data_path)?;
+        if Path::new(&data_path).exists() {
+            return Self::new_from_disk(size, branches, &config);
+        }
 
-            file.set_len(store_size as u64)?;
-            file
-        } else {
-            // Stupid hack for I don't want to create another new function
-            store_len = size;
-            tempfile()?
-        };
+        // Otherwise, create the file and allow it to be the on-disk store.
+        let file = OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create_new(true)
+            .open(data_path)?;
 
+        file.set_len(store_size as u64)?;
         let leafs = get_merkle_tree_leafs(size, branches)?;
 
         ensure!(
@@ -189,7 +189,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let cache_index_start = store_size - cache_size;
 
         Ok(LevelCacheStore {
-            len: store_len,
+            len: 0,
             elem_len: E::byte_len(),
             file,
             data_width: leafs,
@@ -259,6 +259,54 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         store.len = data.len() / store.elem_len;
 
         Ok(store)
+    }
+
+    fn new_from_oss(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
+        let data_path = StoreConfig::data_path(&config.path, &config.id);
+
+        let path = data_path.as_path().display().to_string();
+
+        let obj_name = data_path.strip_prefix(config.oss_config.landed_dir.clone()).unwrap();
+        let credentials = Credentials::new(
+            Some(&config.oss_config.access_key),
+            Some(&config.oss_config.secret_key),
+            None, None, None)?;
+        let region = Region::Custom {
+            region: "us-west-2".to_string(),
+            endpoint: config.oss_config.url.clone(),
+        };
+        let bucket = Bucket::new_with_path_style(&config.oss_config.bucket_name, region, credentials)?;
+        let mut rt = Runtime::new()?;
+
+        let (head_result, code) = rt.block_on(bucket.head_object(obj_name.to_str().unwrap())).unwrap();
+        ensure!(code == 200, "Cannot head {:?} from {}", obj_name, config.oss_config.url);
+
+        let store_size = head_result.content_length.expect("content length in head must exist");
+
+        let size = get_merkle_tree_leafs(store_range, branches)?;
+        ensure!(
+            size == next_pow2(size),
+            "Inconsistent merkle tree row_count detected"
+        );
+
+        let store_range = store_range * E::byte_len();
+
+        let cache_size =
+            get_merkle_tree_cache_size(size, branches, config.rows_to_discard)? * E::byte_len();
+        let cache_index_start = store_range - cache_size;
+
+        Ok(LevelCacheStore {
+            len: store_range / E::byte_len(),
+            elem_len: E::byte_len(),
+            file: tempfile().expect("cannot create temp file"),
+            data_width: size,
+            cache_index_start,
+            loaded_from_disk: true,
+            store_size: store_size as usize,
+            reader: None,
+            path: path,
+            _e: Default::default(),
+        })
     }
 
     // Used for opening v1 compacted DiskStores.

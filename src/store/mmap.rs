@@ -83,6 +83,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
         })
     }
 
+    fn new_from_oss(_store_range: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a MmapStore from oss");
+    }
+
     #[allow(unsafe_code)]
     fn new_from_disk(size: usize, _branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);

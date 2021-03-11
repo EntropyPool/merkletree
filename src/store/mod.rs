@@ -278,6 +278,8 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
 
     fn new_from_disk(size: usize, branches: usize, config: &StoreConfig) -> Result<Self>;
 
+    fn new_from_oss(size: usize, branches: usize, config: &StoreConfig) -> Result<Self>;
+
     fn write_at(&mut self, el: E, index: usize) -> Result<()>;
 
     // Used to reduce lock contention and do the `E` to `u8`

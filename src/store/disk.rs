@@ -136,6 +136,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
         Ok(store)
     }
 
+    fn new_from_oss(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a DiskStore from oss");
+    }
+
     fn new_from_disk(size: usize, _branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
 
