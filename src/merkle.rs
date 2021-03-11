@@ -1169,7 +1169,6 @@ impl<
                 ensure!(self.data.store().is_some(), "store data required");
 
                 let store = self.data.store().unwrap();
-                info!("read start {}, end {} from sealed file store {:?}", segment_start, segment_end, store);
                 store.read_range_into(
                     segment_start,
                     segment_end,
@@ -1468,7 +1467,6 @@ impl<
         ensure!(self.data.store().is_some(), "store data required");
 
         let store = self.data.store().unwrap();
-        info!("read start {}, end {} from sealed file store {:?} 11111111111", start, end, store);
         store.read_range_into(start, end, buf)
     }
 

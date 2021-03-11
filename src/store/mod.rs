@@ -58,7 +58,6 @@ pub struct ExternalReader<R: Read + Send + Sync> {
 
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
-        info!("read start {} end {} from {:?}", start, end, self.path);
         (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
     }
 }
@@ -84,6 +83,7 @@ impl ExternalReader<std::fs::File> {
                     let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
                     let mut rt = Runtime::new()?;
 
+                    info!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
                     let (data, code) = rt.block_on(
                         bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
                     ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);

@@ -14,7 +14,6 @@ use rayon::iter::*;
 use rayon::prelude::*;
 use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
-use log::info;
 
 use crate::hash::Algorithm;
 use crate::merkle::{
@@ -27,6 +26,8 @@ use s3::bucket::Bucket;
 use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
+
+use log::info;
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -60,8 +61,6 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
     // layer data.
     reader: Option<ExternalReader<R>>,
 
-    path: String,
-
     _e: PhantomData<E>,
 }
 
@@ -87,8 +86,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         reader: ExternalReader<R>,
     ) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
-
-        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -135,7 +132,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: Some(reader),
-            path: path,
             _e: Default::default(),
         })
     }
@@ -150,8 +146,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
 impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
-
-        let path = data_path.as_path().display().to_string();
 
         // If the specified file exists, load it from disk.  This is
         // the only supported usage of this call for this type of
@@ -197,7 +191,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
-            path: path,
             _e: Default::default(),
         })
     }
@@ -216,7 +209,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
-            path: "tmp".to_string(),
             _e: Default::default(),
         })
     }
@@ -264,7 +256,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_from_oss(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
 
-        let path = data_path.as_path().display().to_string();
+        info!("create store from oss for {:?}", data_path);
 
         let obj_name = data_path.strip_prefix(config.oss_config.landed_dir.clone()).unwrap();
         let credentials = Credentials::new(
@@ -304,7 +296,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size: store_size as usize,
             reader: None,
-            path: path,
             _e: Default::default(),
         })
     }
@@ -312,8 +303,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     // Used for opening v1 compacted DiskStores.
     fn new_from_disk(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
-
-        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -362,7 +351,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size,
             reader: None,
-            path: path,
             _e: Default::default(),
         })
     }
@@ -876,8 +864,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             start <= self.data_width * self.elem_len || start >= self.cache_index_start,
             "Invalid read start"
         );
-
-        info!("read start {}, end {} from {:?}", start, end, self.path);
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {
