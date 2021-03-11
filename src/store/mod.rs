@@ -126,7 +126,7 @@ impl ReplicaConfig {
         }
     }
 
-    pub fn new_oss_config<T: Into<PathBuf>>(path: T, offsets: Vec<usize>, oss: bool, oss_config: &StoreOssConfig) -> Self {
+    pub fn new_with_oss_config<T: Into<PathBuf>>(path: T, offsets: Vec<usize>, oss: bool, oss_config: &StoreOssConfig) -> Self {
         ReplicaConfig {
             path: path.into(),
             offsets,
@@ -185,6 +185,17 @@ impl StoreConfig {
             rows_to_discard,
             oss: false,
             oss_config: Default::default(),
+        }
+    }
+
+    pub fn new_with_oss_config<T: Into<PathBuf>, S: Into<String>>(path: T, id: S, rows_to_discard: usize, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        StoreConfig {
+            path: path.into(),
+            id: id.into(),
+            size: None,
+            rows_to_discard,
+            oss: oss,
+            oss_config: oss_config.clone(),
         }
     }
 
