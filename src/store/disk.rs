@@ -13,6 +13,7 @@ use rayon::iter::*;
 use rayon::prelude::*;
 use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
+use log::info;
 
 use crate::hash::Algorithm;
 use crate::merkle::{
@@ -40,11 +41,17 @@ pub struct DiskStore<E: Element> {
     // Not to be confused with `len`, this saves the total size of the `store`
     // in bytes and the other one keeps track of used `E` slots in the `DiskStore`.
     store_size: usize,
+
+    path: String,
 }
 
 impl<E: Element> Store<E> for DiskStore<E> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+
+        let path = data_path.as_path().display().to_string();
+
+        info!("new disk store with config {}", path);
 
         // If the specified file exists, load it from disk.
         if Path::new(&data_path).exists() {
@@ -52,6 +59,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
         }
 
         // Otherwise, create the file and allow it to be the on-disk store.
+        info!("try to open {:?}", data_path);
         let file = OpenOptions::new()
             .write(true)
             .read(true)
@@ -68,6 +76,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path,
         })
     }
 
@@ -83,6 +92,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path: "tmp".to_string(),
         })
     }
 
@@ -126,8 +136,13 @@ impl<E: Element> Store<E> for DiskStore<E> {
         Ok(store)
     }
 
+    fn new_from_oss(_store_range: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a DiskStore from oss");
+    }
+
     fn new_from_disk(size: usize, _branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         let file = OpenOptions::new()
             .write(true)
@@ -151,10 +166,12 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: true,
             store_size,
+            path,
         })
     }
 
     fn write_at(&mut self, el: E, index: usize) -> Result<()> {
+        info!("write to {} to {}", index * self.elem_len, self.path);
         self.store_copy_from_slice(index * self.elem_len, el.as_ref())?;
         self.len = std::cmp::max(self.len, index + 1);
         Ok(())
@@ -491,6 +508,8 @@ impl<E: Element> DiskStore<E> {
     pub fn store_read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
         let read_len = end - start;
         let mut read_data = vec![0; read_len];
+        
+        info!("read start {} end {} from {}", start, end, self.path);
 
         self.file
             .read_exact_at(start as u64, &mut read_data)
@@ -543,6 +562,8 @@ impl<E: Element> DiskStore<E> {
     }
     /////////////////////////////////////////////////////////////////////////
     pub fn store_read_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
+        info!("read start {}, end {}, file {:?}", start, end, self.path);
+
         self.file
             .read_exact_at(start as u64, buf)
             .with_context(|| {

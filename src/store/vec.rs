@@ -78,6 +78,10 @@ impl<E: Element> Store<E> for VecStore<E> {
         Ok(VecStore(v))
     }
 
+    fn new_from_oss(_store_range: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a VecStore from oss");
+    }
+
     fn new_from_disk(_size: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
         unimplemented!("Cannot load a VecStore from disk");
     }

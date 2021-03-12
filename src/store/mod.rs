@@ -14,8 +14,16 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
+use log::trace;
+use tempfile::tempfile;
+
 use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
+
+use s3::bucket::Bucket;
+use s3::creds::Credentials;
+use s3::region::Region;
+use tokio::runtime::Runtime;
 
 /// Tree size (number of nodes) used as threshold to decide which build algorithm
 /// to use. Small trees (below this value) use the old build algorithm, optimized
@@ -42,27 +50,59 @@ pub use vec::VecStore;
 pub struct ExternalReader<R: Read + Send + Sync> {
     pub offset: usize,
     pub source: R,
-    pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], source: &R) -> Result<usize>,
+    pub path: String,
+    pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<usize>,
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
-        (self.read_fn)(start + self.offset, end + self.offset, buf, &self.source)
+        (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
     }
+}
+
+pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<usize> {
+    let path_buf = PathBuf::from(path);
+    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+    let credentials = Credentials::new(
+        Some(&oss_config.access_key),
+        Some(&oss_config.secret_key),
+        None, None, None)?;
+    let region = Region::Custom {
+        region: "us-west-2".to_string(),
+        endpoint: oss_config.url.clone(),
+    };
+    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
+    let mut rt = Runtime::new()?;
+
+    trace!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
+    let (data, code) = rt.block_on(
+        bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
+    ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
+    buf.copy_from_slice(&data[0..end - start]);
+
+    Ok(end - start)
 }
 
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
-        let reader = OpenOptions::new().read(true).open(&replica_config.path)?;
-
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
-            source: reader,
-            read_fn: |start, end, buf: &mut [u8], reader: &std::fs::File| {
-                reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
-
+            source: tempfile()?,
+            path: replica_config.path.as_path().display().to_string(),
+            read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
+                if oss {
+                    read_from_oss(start, end, buf, path, oss_config)?;
+                } else {
+                    trace!("read from local: start {}, end {}, path {}", start, end, path);
+                    let reader = OpenOptions::new().read(true).open(&path)?;
+                    reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
+                }
                 Ok(end - start)
             },
+            oss: replica_config.oss,
+            oss_config: replica_config.oss_config.clone(),
         })
     }
 
@@ -94,9 +134,21 @@ pub enum StoreConfigDataVersion {
 const DEFAULT_STORE_CONFIG_DATA_VERSION: u32 = StoreConfigDataVersion::Two as u32;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct StoreOssConfig {
+    pub url: String,
+    pub landed_dir: PathBuf,
+    pub access_key: String,
+    pub secret_key: String,
+    pub bucket_name: String,
+    pub sector_name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct ReplicaConfig {
     pub path: PathBuf,
     pub offsets: Vec<usize>,
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl ReplicaConfig {
@@ -104,6 +156,26 @@ impl ReplicaConfig {
         ReplicaConfig {
             path: path.into(),
             offsets,
+            oss: false,
+            oss_config: Default::default(),
+        }
+    }
+
+    pub fn new_with_oss_config<T: Into<PathBuf>>(path: T, offsets: Vec<usize>, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        ReplicaConfig {
+            path: path.into(),
+            offsets,
+            oss,
+            oss_config: oss_config.clone(),
+        }
+    }
+
+    pub fn from_oss_config(path: &PathBuf, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        ReplicaConfig {
+            path: path.clone(),
+            offsets: vec![0],
+            oss,
+            oss_config: oss_config.clone(),
         }
     }
 }
@@ -113,6 +185,8 @@ impl From<&PathBuf> for ReplicaConfig {
         ReplicaConfig {
             path: path.clone(),
             offsets: vec![0],
+            oss: false,
+            oss_config: Default::default(),
         }
     }
 }
@@ -132,6 +206,9 @@ pub struct StoreConfig {
 
     /// The number of merkle tree rows_to_discard then cache on disk.
     pub rows_to_discard: usize,
+
+    pub oss: bool,
+    pub oss_config: StoreOssConfig,
 }
 
 impl StoreConfig {
@@ -141,6 +218,19 @@ impl StoreConfig {
             id: id.into(),
             size: None,
             rows_to_discard,
+            oss: false,
+            oss_config: Default::default(),
+        }
+    }
+
+    pub fn new_with_oss_config<T: Into<PathBuf>, S: Into<String>>(path: T, id: S, rows_to_discard: usize, oss: bool, oss_config: &StoreOssConfig) -> Self {
+        StoreConfig {
+            path: path.into(),
+            id: id.into(),
+            size: None,
+            rows_to_discard,
+            oss: oss,
+            oss_config: oss_config.clone(),
         }
     }
 
@@ -193,6 +283,8 @@ impl StoreConfig {
             id: id.into(),
             size: val,
             rows_to_discard: config.rows_to_discard,
+            oss: config.oss,
+            oss_config: config.oss_config.clone(),
         }
     }
 }
@@ -213,6 +305,8 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
     fn new_from_slice(size: usize, data: &[u8]) -> Result<Self>;
 
     fn new_from_disk(size: usize, branches: usize, config: &StoreConfig) -> Result<Self>;
+
+    fn new_from_oss(size: usize, branches: usize, config: &StoreConfig) -> Result<Self>;
 
     fn write_at(&mut self, el: E, index: usize) -> Result<()>;
 

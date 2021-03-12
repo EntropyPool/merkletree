@@ -20,7 +20,14 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES};
+use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES, read_from_oss, StoreOssConfig};
+
+use s3::bucket::Bucket;
+use s3::creds::Credentials;
+use s3::region::Region;
+use tokio::runtime::Runtime;
+
+use log::info;
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -54,6 +61,10 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
     // layer data.
     reader: Option<ExternalReader<R>>,
 
+    oss: bool,
+    oss_config: StoreOssConfig,
+    path: String,
+
     _e: PhantomData<E>,
 }
 
@@ -79,6 +90,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         reader: ExternalReader<R>,
     ) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         let file = File::open(data_path)?;
         let metadata = file.metadata()?;
@@ -125,6 +137,9 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: Some(reader),
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -139,10 +154,18 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
 impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         // If the specified file exists, load it from disk.  This is
         // the only supported usage of this call for this type of
         // Store.
+
+        let store_size = E::byte_len() * size;
+
+        if config.oss {
+            return Self::new_from_oss(size, branches, &config);
+        }
+
         if Path::new(&data_path).exists() {
             return Self::new_from_disk(size, branches, &config);
         }
@@ -154,7 +177,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             .create_new(true)
             .open(data_path)?;
 
-        let store_size = E::byte_len() * size;
+        file.set_len(store_size as u64)?;
         let leafs = get_merkle_tree_leafs(size, branches)?;
 
         ensure!(
@@ -168,8 +191,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             get_merkle_tree_cache_size(leafs, branches, config.rows_to_discard)? * E::byte_len();
         let cache_index_start = store_size - cache_size;
 
-        file.set_len(store_size as u64)?;
-
         Ok(LevelCacheStore {
             len: 0,
             elem_len: E::byte_len(),
@@ -179,6 +200,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -197,6 +221,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             store_size,
             loaded_from_disk: false,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path: "tmp".to_string(),
             _e: Default::default(),
         })
     }
@@ -241,9 +268,61 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         Ok(store)
     }
 
+    fn new_from_oss(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
+        let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
+
+        info!("create store from oss for {:?}", data_path);
+
+        let obj_name = data_path.strip_prefix(config.oss_config.landed_dir.clone()).unwrap();
+        let credentials = Credentials::new(
+            Some(&config.oss_config.access_key),
+            Some(&config.oss_config.secret_key),
+            None, None, None)?;
+        let region = Region::Custom {
+            region: "us-west-2".to_string(),
+            endpoint: config.oss_config.url.clone(),
+        };
+        let bucket = Bucket::new_with_path_style(&config.oss_config.bucket_name, region, credentials)?;
+        let mut rt = Runtime::new()?;
+
+        let (head_result, code) = rt.block_on(bucket.head_object(obj_name.to_str().unwrap())).unwrap();
+        ensure!(code == 200, "Cannot head {:?} from {}", obj_name, config.oss_config.url);
+
+        let store_size = head_result.content_length.expect("content length in head must exist");
+
+        let size = get_merkle_tree_leafs(store_range, branches)?;
+        ensure!(
+            size == next_pow2(size),
+            "Inconsistent merkle tree row_count detected"
+        );
+
+        let store_range = store_range * E::byte_len();
+
+        let cache_size =
+            get_merkle_tree_cache_size(size, branches, config.rows_to_discard)? * E::byte_len();
+        let cache_index_start = store_range - cache_size;
+
+        Ok(LevelCacheStore {
+            len: store_range / E::byte_len(),
+            elem_len: E::byte_len(),
+            file: tempfile().expect("cannot create temp file"),
+            data_width: size,
+            cache_index_start,
+            loaded_from_disk: true,
+            store_size: store_size as usize,
+            reader: None,
+            oss: true,
+            oss_config: config.oss_config.clone(),
+            path,
+            _e: Default::default(),
+        })
+    }
+
     // Used for opening v1 compacted DiskStores.
     fn new_from_disk(store_range: usize, branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+        let path = data_path.as_path().display().to_string();
 
         let file = OpenOptions::new()
             .write(true)
@@ -295,6 +374,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             loaded_from_disk: true,
             store_size,
             reader: None,
+            oss: false,
+            oss_config: Default::default(),
+            path,
             _e: Default::default(),
         })
     }
@@ -719,15 +801,31 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             };
         }
 
+        if self.oss {
+            read_from_oss(
+                adjusted_start,
+                adjusted_start + read_len,
+                &mut read_data,
+                self.path.clone(),
+                &self.oss_config
+            ).with_context(|| {
+                format!("failed to read {} bytes from oss file {} at offset {}",
+                        read_len,
+                        self.path,
+                        adjusted_start
+                    )
+            })?;
+            return Ok(read_data);
+        }
+
         self.file
             .read_exact_at(adjusted_start as u64, &mut read_data)
             .with_context(|| {
                 format!(
                     "failed to read {} bytes from file at offset {}",
-                    read_len, start
+                    read_len, adjusted_start
                 )
             })?;
-
         Ok(read_data)
     }
 
@@ -820,15 +918,32 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 start
             };
 
-            self.file
-                .read_exact_at(adjusted_start as u64, buf)
-                .with_context(|| {
-                    format!(
-                        "failed to read {} bytes from file at offset {}",
-                        end - start,
-                        start
-                    )
+            if self.oss {
+                let read_len = end - start;
+                read_from_oss(
+                    adjusted_start,
+                    adjusted_start + read_len,
+                    buf,
+                    self.path.clone(),
+                    &self.oss_config
+                ).with_context(|| {
+                    format!("failed to read {} bytes from oss file {} at offset {}",
+                            read_len,
+                            self.path,
+                            adjusted_start
+                        )
                 })?;
+            } else {
+                self.file
+                    .read_exact_at(adjusted_start as u64, buf)
+                    .with_context(|| {
+                        format!(
+                            "failed to read {} bytes from file at offset {}",
+                            end - start,
+                            start
+                        )
+                    })?;
+            }
         }
 
         Ok(())
