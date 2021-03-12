@@ -13,7 +13,6 @@ use rayon::iter::*;
 use rayon::prelude::*;
 use tempfile::tempfile;
 use typenum::marker_traits::Unsigned;
-use log::info;
 
 use crate::hash::Algorithm;
 use crate::merkle::{
@@ -51,15 +50,12 @@ impl<E: Element> Store<E> for DiskStore<E> {
 
         let path = data_path.as_path().display().to_string();
 
-        info!("new disk store with config {}", path);
-
         // If the specified file exists, load it from disk.
         if Path::new(&data_path).exists() {
             return Self::new_from_disk(size, branches, &config);
         }
 
         // Otherwise, create the file and allow it to be the on-disk store.
-        info!("try to open {:?}", data_path);
         let file = OpenOptions::new()
             .write(true)
             .read(true)
@@ -171,7 +167,6 @@ impl<E: Element> Store<E> for DiskStore<E> {
     }
 
     fn write_at(&mut self, el: E, index: usize) -> Result<()> {
-        info!("write to {} to {}", index * self.elem_len, self.path);
         self.store_copy_from_slice(index * self.elem_len, el.as_ref())?;
         self.len = std::cmp::max(self.len, index + 1);
         Ok(())
@@ -508,9 +503,6 @@ impl<E: Element> DiskStore<E> {
     pub fn store_read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
         let read_len = end - start;
         let mut read_data = vec![0; read_len];
-        
-        info!("read start {} end {} from {}", start, end, self.path);
-
         self.file
             .read_exact_at(start as u64, &mut read_data)
             .with_context(|| {
@@ -562,8 +554,6 @@ impl<E: Element> DiskStore<E> {
     }
     /////////////////////////////////////////////////////////////////////////
     pub fn store_read_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
-        info!("read start {}, end {}, file {:?}", start, end, self.path);
-
         self.file
             .read_exact_at(start as u64, buf)
             .with_context(|| {
