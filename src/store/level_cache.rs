@@ -915,15 +915,32 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 start
             };
 
-            self.file
-                .read_exact_at(adjusted_start as u64, buf)
-                .with_context(|| {
-                    format!(
-                        "failed to read {} bytes from file at offset {}",
-                        end - start,
-                        start
-                    )
+            if self.oss {
+                let read_len = end - start;
+                read_from_oss(
+                    adjusted_start,
+                    adjusted_start + read_len,
+                    buf,
+                    self.path.clone(),
+                    &self.oss_config
+                ).with_context(|| {
+                    format!("failed to read {} bytes from oss file {} at offset {}",
+                            read_len,
+                            self.path,
+                            adjusted_start
+                        )
                 })?;
+            } else {
+                self.file
+                    .read_exact_at(adjusted_start as u64, buf)
+                    .with_context(|| {
+                        format!(
+                            "failed to read {} bytes from file at offset {}",
+                            end - start,
+                            start
+                        )
+                    })?;
+            }
         }
 
         Ok(())
