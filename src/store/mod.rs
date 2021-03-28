@@ -70,7 +70,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
         Some(&oss_config.secret_key),
         None, None, None)?;
     let region = Region::Custom {
-        region: "us-west-2".to_string(),
+        region: oss_config.region.clone(),
         endpoint: oss_config.url.clone(),
     };
     let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
@@ -141,6 +141,8 @@ pub struct StoreOssConfig {
     pub secret_key: String,
     pub bucket_name: String,
     pub sector_name: String,
+    pub region: String,
+    pub multi_ranges: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]

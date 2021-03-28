@@ -280,7 +280,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             Some(&config.oss_config.secret_key),
             None, None, None)?;
         let region = Region::Custom {
-            region: "us-west-2".to_string(),
+            region: config.oss_config.clone(),
             endpoint: config.oss_config.url.clone(),
         };
         let bucket = Bucket::new_with_path_style(&config.oss_config.bucket_name, region, credentials)?;
