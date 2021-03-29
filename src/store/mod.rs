@@ -21,6 +21,7 @@ use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 
 use s3::bucket::Bucket;
+// use s3::command::HttpRange;
 use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
@@ -46,12 +47,20 @@ pub use level_cache::LevelCacheStore;
 pub use mmap::MmapStore;
 pub use vec::VecStore;
 
+#[derive(Debug)]
+pub struct Range<'a> {
+    pub start: usize,
+    pub end: usize,
+    pub data: &'a mut [u8],
+}
+
 #[derive(Clone)]
 pub struct ExternalReader<R: Read + Send + Sync> {
     pub offset: usize,
     pub source: R,
     pub path: String,
     pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<usize>,
+    pub read_ranges: fn(ranges: Vec<Range>, path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>>,
     pub oss: bool,
     pub oss_config: StoreOssConfig,
 }
@@ -59,6 +68,17 @@ pub struct ExternalReader<R: Read + Send + Sync> {
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
         (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
+    }
+    pub fn read_ranges(&self, ranges: Vec<Range>) -> Result<Vec<Result<usize>>> {
+        let mut off_ranges = Vec::new();
+        for range in ranges {
+            off_ranges.push(Range {
+                start: self.offset + range.start,
+                end: self.offset + range.end,
+                data: range.data,
+            })
+        }
+        (self.read_ranges)(off_ranges, self.path.clone(), self.oss, &self.oss_config)
     }
 }
 
@@ -85,6 +105,35 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
     Ok(end - start)
 }
 
+pub fn read_ranges_from_oss(ranges: Vec<Range>, path: String, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>> {
+    let path_buf = PathBuf::from(path);
+    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+    let credentials = Credentials::new(
+        Some(&oss_config.access_key),
+        Some(&oss_config.secret_key),
+        None, None, None)?;
+    let region = Region::Custom {
+        region: "us-west-2".to_string(),
+        endpoint: oss_config.url.clone(),
+    };
+    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
+    let mut rt = Runtime::new()?;
+
+    let mut sizes = Vec::new();
+    for range in ranges {
+        trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+        let (data, code) = rt.block_on(
+            bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
+        if code == 200 || code == 206 {
+            sizes.push(Err(anyhow!("Cannot get {:?} from {}", obj_name, oss_config.url)));
+            continue;
+        }
+        range.data.copy_from_slice(&data[0..range.end - range.start]);
+        sizes.push(Ok(range.end - range.start));
+    }
+    Ok(sizes)
+}
+
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
         Ok(ExternalReader {
@@ -100,6 +149,20 @@ impl ExternalReader<std::fs::File> {
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
                 }
                 Ok(end - start)
+            },
+            read_ranges: |ranges, path: String, oss: bool, oss_config: &StoreOssConfig| {
+                if oss {
+                    read_ranges_from_oss(ranges, path, oss_config)
+                } else {
+                    let mut sizes = Vec::new();
+                    for range in ranges {
+                        trace!("multi read from local: start {}, end {}, path {}", range.start, range.end, path);
+                        let reader = OpenOptions::new().read(true).open(&path)?;
+                        reader.read_exact_at(range.start as u64, &mut range.data[0..range.end - range.start])?;
+                        sizes.push(Ok(range.end - range.start));
+                    }
+                    Ok(sizes)
+                }
             },
             oss: replica_config.oss,
             oss_config: replica_config.oss_config.clone(),
