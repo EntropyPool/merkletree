@@ -1404,7 +1404,7 @@ impl<
                 let proof = self.gen_proof_with_partial_tree(i, rows_to_discard, &partial_tree)?;
 
                 debug!(
-                    "generated partial_tree of row_count {} and len {} with {} branches for proof at {}",
+                    "generated partial_tree of row_count {} and len {} with {} branches for proof at {} with leaf data",
                     partial_tree.row_count,
                     partial_tree.len(),
                     branches,
