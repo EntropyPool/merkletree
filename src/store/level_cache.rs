@@ -400,6 +400,25 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         Ok(())
     }
 
+    fn read_ranges(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<E>>> {
+        match self.read_ranges_into(ranges.clone(), buf) {
+            Ok(results) => {
+                let mut res = Vec::new();
+                for (i, result) in results.iter().enumerate() {
+                    match result {
+                        Ok(_) => {
+                            let range = ranges[i].clone();
+                            res.push(Ok(E::from_slice(&buf[range.buf_start..range.buf_end])));
+                        },
+                        Err(_) => res.push(Err(anyhow!("cannot read range"))),
+                    };
+                }
+                Ok(res)
+            },
+            Err(_) => Err(anyhow!("cannot read ranges"))
+        }
+    }
+
     fn read_at(&self, index: usize) -> Result<E> {
         let start = index * self.elem_len;
         let end = start + self.elem_len;

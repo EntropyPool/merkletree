@@ -1672,7 +1672,6 @@ impl<
                 sub_tree_ranges = self.merge_tree_ranges(sub_tree_ranges);
                 base_tree_ranges = self.merge_tree_ranges(base_tree_ranges);
 
-
                 let mut data_copy = vec![0; total_buf_size];
                 ensure!(self.data.store().is_some(), "store data required");
 
