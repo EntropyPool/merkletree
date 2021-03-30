@@ -406,7 +406,6 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
     fn read_into(&self, pos: usize, buf: &mut [u8]) -> Result<()>;
     fn read_range_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()>;
     fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>>;
-    fn read_ranges(&self, ranges: Vec<Range>) -> Result<Vec<Result<E>>>;
 
     fn len(&self) -> usize;
     fn loaded_from_disk(&self) -> bool;
