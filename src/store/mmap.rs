@@ -9,7 +9,7 @@ use memmap::MmapMut;
 use log::info;
 
 use crate::merkle::Element;
-use crate::store::{Store, StoreConfig};
+use crate::store::{Store, StoreConfig, Range};
 
 /// Store that saves the data on disk, and accesses it using memmap.
 #[derive(Debug)]
@@ -224,6 +224,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
         buf.copy_from_slice(&self.map.as_ref().unwrap()[start..end]);
 
         Ok(())
+    }
+
+    fn read_ranges_into(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        unimplemented!("Not required here");
     }
 
     fn read_range_into(&self, _start: usize, _end: usize, _buf: &mut [u8]) -> Result<()> {

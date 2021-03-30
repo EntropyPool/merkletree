@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::trace;
+use log::{trace, warn};
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
@@ -47,11 +47,12 @@ pub use level_cache::LevelCacheStore;
 pub use mmap::MmapStore;
 pub use vec::VecStore;
 
-#[derive(Debug)]
-pub struct Range<'a> {
+#[derive(Debug, Copy, Clone)]
+pub struct Range {
+    pub index: usize,
     pub start: usize,
     pub end: usize,
-    pub data: &'a mut [u8],
+    pub buf_start: usize,
 }
 
 #[derive(Clone)]
@@ -60,7 +61,7 @@ pub struct ExternalReader<R: Read + Send + Sync> {
     pub source: R,
     pub path: String,
     pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<usize>,
-    pub read_ranges: fn(ranges: Vec<Range>, path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>>,
+    pub read_ranges: fn(ranges: Vec<Range>, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>>,
     pub oss: bool,
     pub oss_config: StoreOssConfig,
 }
@@ -69,16 +70,17 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
         (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
     }
-    pub fn read_ranges(&self, ranges: Vec<Range>) -> Result<Vec<Result<usize>>> {
+    pub fn read_ranges(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
         let mut off_ranges = Vec::new();
         for range in ranges {
             off_ranges.push(Range {
+                index: range.index,
                 start: self.offset + range.start,
                 end: self.offset + range.end,
-                data: range.data,
+                buf_start: range.buf_start,
             })
         }
-        (self.read_ranges)(off_ranges, self.path.clone(), self.oss, &self.oss_config)
+        (self.read_ranges)(off_ranges, buf, self.path.clone(), self.oss, &self.oss_config)
     }
 }
 
@@ -105,7 +107,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
     Ok(end - start)
 }
 
-pub fn read_ranges_from_oss(ranges: Vec<Range>, path: String, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>> {
+pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>> {
     let path_buf = PathBuf::from(path);
     let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
     let credentials = Credentials::new(
@@ -120,15 +122,17 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, path: String, oss_config: &Store
     let mut rt = Runtime::new()?;
 
     let mut sizes = Vec::new();
+
     for range in ranges {
         trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
         let (data, code) = rt.block_on(
             bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
-        if code == 200 || code == 206 {
-            sizes.push(Err(anyhow!("Cannot get {:?} from {}", obj_name, oss_config.url)));
+        if code != 200 && code != 206 {
+            warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
+            sizes.push(Err(anyhow!("cannot get file")));
             continue;
         }
-        range.data.copy_from_slice(&data[0..range.end - range.start]);
+        buf[range.buf_start..].copy_from_slice(&data[0..range.end - range.start]);
         sizes.push(Ok(range.end - range.start));
     }
     Ok(sizes)
@@ -150,16 +154,17 @@ impl ExternalReader<std::fs::File> {
                 }
                 Ok(end - start)
             },
-            read_ranges: |ranges, path: String, oss: bool, oss_config: &StoreOssConfig| {
+            read_ranges: |ranges, buf, path: String, oss: bool, oss_config: &StoreOssConfig| {
                 if oss {
-                    read_ranges_from_oss(ranges, path, oss_config)
+                    read_ranges_from_oss(ranges, buf, path, oss_config)
                 } else {
                     let mut sizes = Vec::new();
                     for range in ranges {
                         trace!("multi read from local: start {}, end {}, path {}", range.start, range.end, path);
                         let reader = OpenOptions::new().read(true).open(&path)?;
-                        reader.read_exact_at(range.start as u64, &mut range.data[0..range.end - range.start])?;
-                        sizes.push(Ok(range.end - range.start));
+                        let read_len = range.end - range.start;
+                        reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_start + read_len])?;
+                        sizes.push(Ok(read_len));
                     }
                     Ok(sizes)
                 }
@@ -398,6 +403,7 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
     fn read_range(&self, r: ops::Range<usize>) -> Result<Vec<E>>;
     fn read_into(&self, pos: usize, buf: &mut [u8]) -> Result<()>;
     fn read_range_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()>;
+    fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>>;
 
     fn len(&self) -> usize;
     fn loaded_from_disk(&self) -> bool;

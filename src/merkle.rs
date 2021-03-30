@@ -1485,11 +1485,6 @@ impl<
                 let segment_start = (i / segment_width) * segment_width;
                 let segment_end = segment_start + segment_width;
 
-                debug!("leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
-                        partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
-                       self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
-                       cached_leafs, segment_width, segment_start, segment_end, i);
-
                 // Copy the proper segment of the base data into memory and
                 // initialize a VecStore to back a new, smaller MT.
                 let mut data_copy = vec![0; segment_width * E::byte_len()];
@@ -1501,6 +1496,12 @@ impl<
                     segment_end,
                     &mut data_copy,
                 )?;
+
+                debug!("leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
+                        partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
+                       self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
+                       cached_leafs, segment_width, segment_start, segment_end, i);
+
                 let partial_store = VecStore::new_from_slice(segment_width, &data_copy)?;
                 ensure!(
                     Store::len(&partial_store) == segment_width,
