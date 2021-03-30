@@ -1346,8 +1346,8 @@ impl<
                         segment_width: 0,
                         range: Range {
                             index: leaf_index,
-                            start: 0,
-                            end: 0,
+                            start: leaf_index,
+                            end: leaf_index + 1,
                             buf_start: 0,
                             buf_end: 0,
                         },
@@ -1529,6 +1529,30 @@ impl<
         dedup_tree_ranges
     }
 
+    fn caculate_tree_offset(&self, tree_ranges: Vec<TreeRanges>) -> Vec<TreeRanges> {
+        let mut ranges = Vec::<TreeRanges>::new();
+
+        for tree_range in tree_ranges {
+            let mut leaf_ranges = Vec::new();
+            let mut total_buf_size = 0;
+
+            for range in tree_range.ranges {
+                let mut range = range.clone();
+                range.range.buf_start = total_buf_size;
+                total_buf_size += range.segment_width * E::byte_len();
+                range.range.buf_end = total_buf_size;
+                leaf_ranges.push(range);
+            }
+
+            ranges.push(TreeRanges {
+                tree_index: tree_range.tree_index,
+                ranges: leaf_ranges,
+            });
+        }
+
+        ranges
+    }
+
     pub fn read_leafs(
         &self,
         challenges: Vec<usize>,
@@ -1671,6 +1695,10 @@ impl<
                 top_tree_ranges = self.merge_tree_ranges(top_tree_ranges);
                 sub_tree_ranges = self.merge_tree_ranges(sub_tree_ranges);
                 base_tree_ranges = self.merge_tree_ranges(base_tree_ranges);
+
+                top_tree_ranges = self.caculate_tree_offset(top_tree_ranges);
+                sub_tree_ranges = self.caculate_tree_offset(sub_tree_ranges);
+                base_tree_ranges = self.caculate_tree_offset(base_tree_ranges);
 
                 let mut data_copy = vec![0; total_buf_size];
                 ensure!(self.data.store().is_some(), "store data required");
@@ -2164,6 +2192,45 @@ impl<
             Data::TopTree(_) => None,
             Data::SubTree(_) => None,
             Data::BaseTree(store) => Some(store),
+        }
+    }
+
+    /// Returns merkle leaf at index i
+    #[inline]
+    pub fn read_ranges(&self, tree_range: TreeRanges) -> Result<Vec<Result<E>>> {
+        match &self.data {
+            Data::TopTree(sub_trees) => {
+                // Locate the top-layer tree the sub-tree leaf is contained in.
+                if TopTreeArity::to_usize() != sub_trees.len() {
+                    ()
+                }
+
+                let tree_index = tree_range.tree_index;
+                let tree = &sub_trees[tree_index];
+
+                tree.read_ranges(tree_range)
+            }
+            Data::SubTree(base_trees) => {
+                // Locate the sub-tree layer tree the base leaf is contained in.
+                if SubTreeArity::to_usize() != base_trees.len() {
+                    ()
+                }
+
+                let tree_index = tree_range.tree_index;
+                let tree = &base_trees[tree_index];
+
+                tree.read_ranges(tree_range)
+            }
+            Data::BaseTree(data) => {
+                // Read from the base layer tree data.
+                let mut ranges = Vec::new();
+
+                for range in tree_range.ranges {
+                    ranges.push(range.range.clone());
+                }
+
+                data.read_ranges(ranges)
+            }
         }
     }
 

@@ -226,7 +226,7 @@ impl<E: Element> Store<E> for MmapStore<E> {
         Ok(())
     }
 
-    fn read_ranges(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<E>>> {
+    fn read_ranges(&self, _ranges: Vec<Range>) -> Result<Vec<Result<E>>> {
         unimplemented!("Not required here");
     }
 

@@ -400,8 +400,16 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         Ok(())
     }
 
-    fn read_ranges(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<E>>> {
-        match self.read_ranges_into(ranges.clone(), buf) {
+    fn read_ranges(&self, ranges: Vec<Range>) -> Result<Vec<Result<E>>> {
+        let mut total_size = 0;
+
+        for range in ranges.clone() {
+            total_size += range.buf_end - range.buf_start;
+        }
+
+        let mut buf = vec![0u8; total_size];
+
+        match self.read_ranges_into(ranges.clone(), &mut buf) {
             Ok(results) => {
                 let mut res = Vec::new();
                 for (i, result) in results.iter().enumerate() {
