@@ -1204,6 +1204,7 @@ impl<
             Data::SubTree(_) => self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard),
             Data::BaseTree(_) => {
                 let mut nodes = Vec::new();
+
                 let mut ranges = Vec::new();
                 let mut total_buf_size = 0;
 
@@ -1216,8 +1217,8 @@ impl<
 
                 let mut infos = Vec::new();
 
-                for (index, challenge) in challenges.iter().enumerate() {
-                    let i = *challenge;
+                for challenge in challenges {
+                    let i = challenge;
                     ensure!(
                         i < self.leafs,
                         "{} is out of bounds (max: {})",
@@ -1274,12 +1275,39 @@ impl<
                            self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                            cached_leafs, segment_width, segment_start, segment_end, i);
 
+                    /*
+                    let mut data_copy = vec![0; segment_width * E::byte_len()];
+                    let store = self.data.store().unwrap();
+                    store.read_range_into(
+                        segment_start,
+                        segment_end,
+                        &mut data_copy,
+                    )?;
+
+                    nodes.push(
+                        LeafNodeData {
+                            data: Ok(data_copy),
+                            challenge: challenge,
+                            branches: branches,
+                            partial_row_count: partial_row_count,
+                            segment_width: segment_width,
+                            rows_to_discard: Some(rows_to_discard),
+                            tree_index: 0,
+                        }
+                    )
+                    */
+
+                    let buf_end = total_buf_size + segment_width * E::byte_len();
+
                     ranges.push(Range {
                         index: i,
                         start: segment_start,
                         end: segment_end,
-                        buf_start: segment_width * E::byte_len() * index,
+                        buf_start: total_buf_size,
+                        buf_end: buf_end,
                     });
+
+                    total_buf_size = buf_end;
 
                     infos.push(ChallengeInfo {
                         branches: branches,
@@ -1287,26 +1315,34 @@ impl<
                         rows_to_discard: rows_to_discard,
                         partial_row_count: partial_row_count,
                     });
-
-                    total_buf_size += segment_width * E::byte_len();
                 }
 
                 let mut data_copy = vec![0; total_buf_size];
                 ensure!(self.data.store().is_some(), "store data required");
 
                 let store = self.data.store().unwrap();
-                let err = store.read_ranges_into(
+
+                let results = store.read_ranges_into(
                     ranges.clone(),
                     &mut data_copy,
-                );
+                )?;
 
                 for (i, range) in ranges.iter().enumerate() {
+                    /*
+                    store.read_range_into(
+                        range.start,
+                        range.end,
+                        &mut data_copy[range.buf_start..range.buf_end],
+                    )?;
+                    */
+
                     nodes.push(
                         LeafNodeData {
-                            data: match err {
-                                Ok(_) => Ok((&data_copy[range.buf_start..]).to_vec()),
+                            data: match results[i] {
+                                Ok(_) => Ok((&data_copy[range.buf_start..range.buf_end]).to_vec()),
                                 Err(_) => Err(anyhow!("fail to read challenge {}", range.index)),
                             },
+                            // data: Ok((&data_copy[range.buf_start..range.buf_end]).to_vec()),
                             challenge: range.index,
                             branches: infos[i].branches,
                             partial_row_count: infos[i].partial_row_count,

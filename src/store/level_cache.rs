@@ -446,6 +446,8 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     }
 
     fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        // let mut results = Vec::new();
+
         for range in &ranges {
             let start = range.start * self.elem_len;
             let end = range.end * self.elem_len;
@@ -457,9 +459,17 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
                 start <= self.data_width * self.elem_len || start >= self.cache_index_start,
                 "out of bounds"
             );
+
+            /*
+            match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
+                Ok(_) => results.push(Ok(range.end - range.start)),
+                Err(_) => results.push(Err(anyhow!("fail to read range"))),
+            };
+            */
         }
 
         self.store_read_ranges_into(ranges, buf)
+        // Ok(results)
     }
 
     fn read_range(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
@@ -908,8 +918,8 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         let mut direct_sizes = Vec::new();
 
         for range in ranges.clone() {
-            let start = range.start;
-            let end = range.end;
+            let start = range.start * self.elem_len;
+            let end = range.end * self.elem_len;
             let read_len = end - start;
 
             ensure!(
@@ -921,7 +931,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 reader_ranges.push(range);
             } else {
                 direct_ranges.push(range);
-                match self.store_read_into(start, end, &mut buf[range.buf_start..]) {
+                match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
                     Err(_) => direct_sizes.push(Err(anyhow!("fail to read file"))),
                     Ok(_) => direct_sizes.push(Ok(read_len)),
                 }

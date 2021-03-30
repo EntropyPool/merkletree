@@ -53,6 +53,7 @@ pub struct Range {
     pub start: usize,
     pub end: usize,
     pub buf_start: usize,
+    pub buf_end: usize,
 }
 
 #[derive(Clone)]
@@ -78,6 +79,7 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
                 start: self.offset + range.start,
                 end: self.offset + range.end,
                 buf_start: range.buf_start,
+                buf_end: range.buf_end,
             })
         }
         (self.read_ranges)(off_ranges, buf, self.path.clone(), self.oss, &self.oss_config)
@@ -132,7 +134,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
             sizes.push(Err(anyhow!("cannot get file")));
             continue;
         }
-        buf[range.buf_start..].copy_from_slice(&data[0..range.end - range.start]);
+        buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
         sizes.push(Ok(range.end - range.start));
     }
     Ok(sizes)
@@ -163,7 +165,7 @@ impl ExternalReader<std::fs::File> {
                         trace!("multi read from local: start {}, end {}, path {}", range.start, range.end, path);
                         let reader = OpenOptions::new().read(true).open(&path)?;
                         let read_len = range.end - range.start;
-                        reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_start + read_len])?;
+                        reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_end])?;
                         sizes.push(Ok(read_len));
                     }
                     Ok(sizes)
