@@ -1,4 +1,4 @@
-    use std::marker::PhantomData;
+use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -200,6 +200,21 @@ pub trait Element: Ord + Clone + AsRef<[u8]> + Sync + Send + Default + std::fmt:
 }
 
 #[derive(Debug)]
+pub struct TreeRanges {
+    pub tree_index: usize,
+    pub ranges: Vec<Range>,
+}
+
+impl Clone for TreeRanges {
+    fn clone(&self) ->TreeRanges {
+        TreeRanges {
+            tree_index: self.tree_index,
+            ranges: self.ranges.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct LeafNodeData {
     pub data: Result<Vec<u8>>,
     pub challenge: usize,
@@ -208,6 +223,58 @@ pub struct LeafNodeData {
     pub branches: usize,
     pub rows_to_discard: Option<usize>,
     pub tree_index: usize,
+    pub top_tree_ranges: Vec<TreeRanges>,
+    pub sub_tree_ranges: Vec<TreeRanges>,
+    pub base_tree_ranges: Vec<TreeRanges>,
+    pub top_tree_bufs: Vec<Result<Vec<u8>>>,
+    pub sub_tree_bufs: Vec<Result<Vec<u8>>>,
+    pub base_tree_bufs: Vec<Result<Vec<u8>>>,
+}
+
+impl Clone for LeafNodeData {
+    fn clone(&self) -> LeafNodeData {
+        let mut data = LeafNodeData {
+            data: match &self.data {
+                Ok(data) => Ok(data.clone()),
+                Err(_) => Err(anyhow!("tree data error")),
+            },
+            challenge: self.challenge,
+            partial_row_count: self.partial_row_count,
+            segment_width: self.segment_width,
+            branches: self.branches,
+            rows_to_discard: self.rows_to_discard,
+            tree_index: self.tree_index,
+            top_tree_ranges: self.top_tree_ranges.clone(),
+            sub_tree_ranges: self.sub_tree_ranges.clone(),
+            base_tree_ranges: self.base_tree_ranges.clone(),
+            top_tree_bufs: Vec::new(),
+            sub_tree_bufs: Vec::new(),
+            base_tree_bufs: Vec::new(),
+        };
+
+        for buf in &self.top_tree_bufs {
+            match buf {
+                Ok(buf) => data.top_tree_bufs.push(Ok(buf.clone())),
+                Err(_) => data.top_tree_bufs.push(Err(anyhow!("fail to read tree"))),
+            }
+        }
+
+        for buf in &self.sub_tree_bufs {
+            match buf {
+                Ok(buf) => data.sub_tree_bufs.push(Ok(buf.clone())),
+                Err(_) => data.sub_tree_bufs.push(Err(anyhow!("fail to read tree"))),
+            }
+        }
+
+        for buf in &self.base_tree_bufs {
+            match buf {
+                Ok(buf) => data.base_tree_bufs.push(Ok(buf.clone())),
+                Err(_) => data.base_tree_bufs.push(Err(anyhow!("fail to read tree"))),
+            }
+        }
+
+        data
+    }
 }
 
 impl<
@@ -1129,19 +1196,7 @@ impl<
             let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
 
             node[0].tree_index = tree_index;
-
-            nodes.push(LeafNodeData {
-                data: match &node[0].data {
-                    Ok(data) => Ok(data.clone()),
-                    Err(_) => Err(anyhow!("fail to read top leafs")),
-                },
-                challenge: node[0].challenge,
-                partial_row_count: node[0].partial_row_count,
-                segment_width: node[0].segment_width,
-                branches: node[0].branches,
-                rows_to_discard: node[0].rows_to_discard,
-                tree_index,
-            });
+            nodes.push(node[0].clone());
         }
 
         Ok(nodes)
@@ -1176,22 +1231,392 @@ impl<
             let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
 
             node[0].tree_index = tree_index;
-
-            nodes.push(LeafNodeData {
-                data: match &node[0].data {
-                    Ok(data) => Ok(data.clone()),
-                    Err(_) => Err(anyhow!("fail to read sub leafs")),
-                },
-                challenge: node[0].challenge,
-                partial_row_count: node[0].partial_row_count,
-                segment_width: node[0].segment_width,
-                branches: node[0].branches,
-                rows_to_discard: node[0].rows_to_discard,
-                tree_index,
-            });
+            nodes.push(node[0].clone());
         }
 
         Ok(nodes)
+    }
+
+    /// Returns merkle leaf index i
+    #[inline]
+    pub fn get_top_tree_index(&self, i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(sub_trees) => {
+                // Locate the top-layer tree the sub-tree leaf is contained in.
+                ensure!(
+                    TopTreeArity::to_usize() == sub_trees.len(),
+                    "Top layer tree shape mis-match"
+                );
+                Ok(i / (self.leafs / TopTreeArity::to_usize()))
+            },
+            Data::SubTree(_) => Err(anyhow!("not top tree")),
+            Data::BaseTree(_) => Err(anyhow!("not top tree")),
+        }
+    }
+
+    pub fn get_sub_tree_index(&self, i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(_) => Err(anyhow!("not sub tree")),
+            Data::SubTree(base_trees) => {
+                // Locate the sub-tree layer tree the base leaf is contained in.
+                ensure!(
+                    SubTreeArity::to_usize() == base_trees.len(),
+                    "Sub-tree shape mis-match"
+                );
+                Ok(i / (self.leafs / SubTreeArity::to_usize()))
+            },
+            Data::BaseTree(_) => Err(anyhow!("not sub tree")),
+        }
+    }
+
+    pub fn get_base_tree_index(&self, _i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(_) => Err(anyhow!("not sub tree")),
+            Data::SubTree(_) => Err(anyhow!("not base tree")),
+            Data::BaseTree(_) => Ok(0),
+        }
+    }
+
+    /// Returns merkle leaf index i
+    #[inline]
+    pub fn get_top_tree_leaf_index(&self, i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(sub_trees) => {
+                // Locate the top-layer tree the sub-tree leaf is contained in.
+                ensure!(
+                    TopTreeArity::to_usize() == sub_trees.len(),
+                    "Top layer tree shape mis-match"
+                );
+                let tree_index = i / (self.leafs / TopTreeArity::to_usize());
+                let tree = &sub_trees[tree_index];
+                let tree_leafs = tree.leafs();
+
+                // Get the leaf index within the sub-tree.
+                Ok(i % tree_leafs)
+            },
+            Data::SubTree(_) => Err(anyhow!("not top tree")),
+            Data::BaseTree(_) => Err(anyhow!("not top tree")),
+        }
+    }
+
+    pub fn get_sub_tree_leaf_index(&self, i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(_) => Err(anyhow!("not sub tree")),
+            Data::SubTree(base_trees) => {
+                // Locate the sub-tree layer tree the base leaf is contained in.
+                ensure!(
+                    SubTreeArity::to_usize() == base_trees.len(),
+                    "Sub-tree shape mis-match"
+                );
+                let tree_index = i / (self.leafs / SubTreeArity::to_usize());
+                let tree = &base_trees[tree_index];
+                let tree_leafs = tree.leafs();
+
+                // Get the leaf index within the sub-tree.
+                Ok(i % tree_leafs)
+            },
+            Data::BaseTree(_) => Err(anyhow!("not sub tree")),
+        }
+    }
+
+    pub fn get_base_tree_leaf_index(&self, i: usize) -> Result<usize> {
+        match &self.data {
+            Data::TopTree(_) => Err(anyhow!("not base tree")),
+            Data::BaseTree(_) => Ok(i),
+            Data::SubTree(_) => Err(anyhow!("not base tree")),
+        }
+    }
+
+    fn get_top_tree_ranges(
+        &self,
+        i: usize,
+        branches: usize,
+        rows_to_discard: usize,
+    ) -> Result<Vec<TreeRanges>> {
+        let mut ranges = Vec::new();
+
+        match self.get_top_tree_index(i) {
+            Ok(tree_index) => match self.get_top_tree_leaf_index(i) {
+                Ok(leaf_index) => {
+                    let leafs = vec![Range{
+                        index: leaf_index,
+                        start: 0,
+                        end: 0,
+                        buf_start: 0,
+                        buf_end: 0,
+                    }];
+                    ranges.push(TreeRanges {
+                        tree_index: tree_index,
+                        ranges: leafs.clone(),
+                    });
+                },
+                Err(_) => {}
+            },
+            Err(_) => {}
+        }
+
+        let mut base = 0;
+        let shift = log2_pow2(branches);
+        let mut width = self.leafs;
+        let data_width = width;
+        let total_size = get_merkle_tree_len(data_width, branches)?;
+        let cache_size = get_merkle_tree_cache_size(self.leafs, branches, rows_to_discard)?;
+        let cache_index_start = total_size - cache_size;
+        let cached_leafs = get_merkle_tree_leafs(cache_size, branches)?;
+        ensure!(
+            cached_leafs == next_pow2(cached_leafs),
+            "Cached leafs size must be a power of 2"
+        );
+
+        let mut j = i;
+
+        while base + 1 < self.len() {
+            let hash_index = (j / branches) * branches;
+            for k in hash_index..hash_index + branches {
+                if k != j {
+                    let read_index = base + k;
+                    if read_index < data_width || read_index >= cache_index_start {
+                        match self.get_top_tree_index(base + k) {
+                            Ok(tree_index) => match self.get_top_tree_leaf_index(j) {
+                                Ok(leaf_index) => {
+                                    let mut inserted = false;
+                                    for range in ranges.iter_mut() {
+                                        if range.tree_index == tree_index {
+                                            range.ranges.push(Range {
+                                                index: leaf_index,
+                                                start: 0,
+                                                end: 0,
+                                                buf_start: 0,
+                                                buf_end: 0,
+                                            });
+                                            inserted = true
+                                        }
+                                    }
+
+                                    if !inserted {
+                                        let leafs = vec![Range{
+                                            index: leaf_index,
+                                            start: 0,
+                                            end: 0,
+                                            buf_start: 0,
+                                            buf_end: 0,
+                                        }];
+                                        ranges.push(TreeRanges {
+                                            tree_index: tree_index,
+                                            ranges: leafs.clone(),
+                                        });
+                                    }
+                                },
+                                Err(_) => {}
+                            },
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+
+            base += width;
+            width >>= shift; // width /= branches
+
+            j >>= shift; // j /= branches;
+        }
+
+        Ok(ranges)
+    }
+
+    fn get_sub_tree_ranges(
+        &self,
+        i: usize,
+        branches: usize,
+        rows_to_discard: usize,
+    ) -> Result<Vec<TreeRanges>> {
+        let mut ranges = Vec::new();
+
+        match self.get_sub_tree_index(i) {
+            Ok(tree_index) => match self.get_sub_tree_leaf_index(i) {
+                Ok(leaf_index) => {
+                    let leafs = vec![Range{
+                        index: leaf_index,
+                        start: 0,
+                        end: 0,
+                        buf_start: 0,
+                        buf_end: 0,
+                    }];
+                    ranges.push(TreeRanges {
+                        tree_index: tree_index,
+                        ranges: leafs.clone(),
+                    });
+                },
+                Err(_) => {}
+            },
+            Err(_) => {}
+        }
+
+        let mut base = 0;
+        let shift = log2_pow2(branches);
+        let mut width = self.leafs;
+        let data_width = width;
+        let total_size = get_merkle_tree_len(data_width, branches)?;
+        let cache_size = get_merkle_tree_cache_size(self.leafs, branches, rows_to_discard)?;
+        let cache_index_start = total_size - cache_size;
+        let cached_leafs = get_merkle_tree_leafs(cache_size, branches)?;
+        ensure!(
+            cached_leafs == next_pow2(cached_leafs),
+            "Cached leafs size must be a power of 2"
+        );
+
+        let mut j = i;
+
+        while base + 1 < self.len() {
+            let hash_index = (j / branches) * branches;
+            for k in hash_index..hash_index + branches {
+                if k != j {
+                    let read_index = base + k;
+                    if read_index < data_width || read_index >= cache_index_start {
+                        match self.get_sub_tree_index(base + k) {
+                            Ok(tree_index) => match self.get_sub_tree_leaf_index(j) {
+                                Ok(leaf_index) => {
+                                    let mut inserted = false;
+                                    for range in ranges.iter_mut() {
+                                        if range.tree_index == tree_index {
+                                            range.ranges.push(Range {
+                                                index: leaf_index,
+                                                start: 0,
+                                                end: 0,
+                                                buf_start: 0,
+                                                buf_end: 0,
+                                            });
+                                            inserted = true
+                                        }
+                                    }
+
+                                    if !inserted {
+                                        let leafs = vec![Range{
+                                            index: leaf_index,
+                                            start: 0,
+                                            end: 0,
+                                            buf_start: 0,
+                                            buf_end: 0,
+                                        }];
+                                        ranges.push(TreeRanges {
+                                            tree_index: tree_index,
+                                            ranges: leafs.clone(),
+                                        });
+                                    }
+                                },
+                                Err(_) => {}
+                            },
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+
+            base += width;
+            width >>= shift; // width /= branches
+
+            j >>= shift; // j /= branches;
+        }
+
+        Ok(ranges)
+    }
+
+    fn get_base_tree_ranges(
+        &self,
+        i: usize,
+        branches: usize,
+        rows_to_discard: usize,
+    ) -> Result<Vec<TreeRanges>> {
+        let mut ranges = Vec::new();
+
+        match self.get_base_tree_index(i) {
+            Ok(tree_index) => match self.get_base_tree_leaf_index(i) {
+                Ok(leaf_index) => {
+                    let leafs = vec![Range{
+                        index: leaf_index,
+                        start: 0,
+                        end: 0,
+                        buf_start: 0,
+                        buf_end: 0,
+                    }];
+                    ranges.push(TreeRanges {
+                        tree_index: tree_index,
+                        ranges: leafs.clone(),
+                    });
+                },
+                Err(_) => {}
+            },
+            Err(_) => {}
+        }
+
+        let mut base = 0;
+        let shift = log2_pow2(branches);
+        let mut width = self.leafs;
+        let data_width = width;
+        let total_size = get_merkle_tree_len(data_width, branches)?;
+        let cache_size = get_merkle_tree_cache_size(self.leafs, branches, rows_to_discard)?;
+        let cache_index_start = total_size - cache_size;
+        let cached_leafs = get_merkle_tree_leafs(cache_size, branches)?;
+        ensure!(
+            cached_leafs == next_pow2(cached_leafs),
+            "Cached leafs size must be a power of 2"
+        );
+
+        let mut j = i;
+
+        while base + 1 < self.len() {
+            let hash_index = (j / branches) * branches;
+            for k in hash_index..hash_index + branches {
+                if k != j {
+                    let read_index = base + k;
+                    if read_index < data_width || read_index >= cache_index_start {
+                        match self.get_base_tree_index(base + k) {
+                            Ok(tree_index) => match self.get_base_tree_leaf_index(j) {
+                                Ok(leaf_index) => {
+                                    let mut inserted = false;
+                                    for range in ranges.iter_mut() {
+                                        if range.tree_index == tree_index {
+                                            range.ranges.push(Range {
+                                                index: leaf_index,
+                                                start: 0,
+                                                end: 0,
+                                                buf_start: 0,
+                                                buf_end: 0,
+                                            });
+                                            inserted = true
+                                        }
+                                    }
+
+                                    if !inserted {
+                                        let leafs = vec![Range{
+                                            index: leaf_index,
+                                            start: 0,
+                                            end: 0,
+                                            buf_start: 0,
+                                            buf_end: 0,
+                                        }];
+                                        ranges.push(TreeRanges {
+                                            tree_index: tree_index,
+                                            ranges: leafs.clone(),
+                                        });
+                                    }
+                                },
+                                Err(_) => {}
+                            },
+                            Err(_) => {}
+                        }
+                    }
+                }
+            }
+
+            base += width;
+            width >>= shift; // width /= branches
+
+            j >>= shift; // j /= branches;
+        }
+
+        Ok(ranges)
+
     }
 
     pub fn read_leafs(
@@ -1216,6 +1641,9 @@ impl<
                 }
 
                 let mut infos = Vec::new();
+                let mut top_tree_ranges = Vec::new();
+                let mut sub_tree_ranges = Vec::new();
+                let mut base_tree_ranges = Vec::new();
 
                 for challenge in challenges {
                     let i = challenge;
@@ -1315,6 +1743,19 @@ impl<
                         rows_to_discard: rows_to_discard,
                         partial_row_count: partial_row_count,
                     });
+
+                    match self.get_top_tree_ranges(i, branches, rows_to_discard) {
+                        Ok(ranges) => top_tree_ranges.extend(ranges),
+                        Err(_) => {}
+                    }
+                    match self.get_sub_tree_ranges(i, branches, rows_to_discard) {
+                        Ok(ranges) => sub_tree_ranges.extend(ranges),
+                        Err(_) => {}
+                    }
+                    match self.get_base_tree_ranges(i, branches, rows_to_discard) {
+                        Ok(ranges) => base_tree_ranges.extend(ranges),
+                        Err(_) => {}
+                    }
                 }
 
                 let mut data_copy = vec![0; total_buf_size];
@@ -1326,6 +1767,81 @@ impl<
                     ranges.clone(),
                     &mut data_copy,
                 )?;
+
+                let mut dedup_top_tree_ranges = Vec::<TreeRanges>::new();
+                for tree_range in top_tree_ranges {
+                    let mut tree_found = false;
+                    for dedup_tree_range in dedup_top_tree_ranges.iter_mut() {
+                        if dedup_tree_range.tree_index == tree_range.tree_index {
+                            tree_found = true;
+                            let mut range_found = false;
+                            for range in tree_range.ranges.iter() {
+                                for dedup_range in dedup_tree_range.ranges.iter() {
+                                    if range.index == dedup_range.index {
+                                        range_found = true;
+                                        break;
+                                    }
+                                }
+                                if !range_found {
+                                    dedup_tree_range.ranges.push(range.clone());
+                                }
+                            }
+                        }
+                    }
+                    if !tree_found {
+                        dedup_top_tree_ranges.push(tree_range);
+                    }
+                }
+
+                let mut dedup_sub_tree_ranges = Vec::<TreeRanges>::new();
+                for tree_range in sub_tree_ranges {
+                    let mut tree_found = false;
+                    for dedup_tree_range in dedup_sub_tree_ranges.iter_mut() {
+                        if dedup_tree_range.tree_index == tree_range.tree_index {
+                            tree_found = true;
+                            let mut range_found = false;
+                            for range in tree_range.ranges.iter() {
+                                for dedup_range in dedup_tree_range.ranges.iter() {
+                                    if range.index == dedup_range.index {
+                                        range_found = true;
+                                        break;
+                                    }
+                                }
+                                if !range_found {
+                                    dedup_tree_range.ranges.push(range.clone());
+                                }
+                            }
+                        }
+                    }
+                    if !tree_found {
+                        dedup_sub_tree_ranges.push(tree_range);
+                    }
+                }
+
+                let mut dedup_base_tree_ranges = Vec::<TreeRanges>::new();
+                for tree_range in base_tree_ranges {
+                    let mut tree_found = false;
+                    for dedup_tree_range in dedup_base_tree_ranges.iter_mut() {
+                        if dedup_tree_range.tree_index == tree_range.tree_index {
+                            tree_found = true;
+                            let mut range_found = false;
+                            for range in tree_range.ranges.iter() {
+                                for dedup_range in dedup_tree_range.ranges.iter() {
+                                    if range.index == dedup_range.index {
+                                        range_found = true;
+                                        break;
+                                    }
+                                }
+                                if !range_found {
+                                    dedup_tree_range.ranges.push(range.clone());
+                                }
+                            }
+                        }
+                    }
+                    if !tree_found {
+                        dedup_base_tree_ranges.push(tree_range);
+                    }
+                }
 
                 for (i, range) in ranges.iter().enumerate() {
                     /*
@@ -1349,6 +1865,12 @@ impl<
                             segment_width: infos[i].segment_width,
                             rows_to_discard: Some(infos[i].rows_to_discard),
                             tree_index: 0,
+                            top_tree_ranges: dedup_top_tree_ranges.clone(),
+                            sub_tree_ranges: dedup_sub_tree_ranges.clone(),
+                            base_tree_ranges: dedup_base_tree_ranges.clone(),
+                            top_tree_bufs: Vec::new(),
+                            sub_tree_bufs: Vec::new(),
+                            base_tree_bufs: Vec::new(),
                         }
                     )
                 }
