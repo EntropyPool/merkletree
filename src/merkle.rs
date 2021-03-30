@@ -1,4 +1,4 @@
-use std::marker::PhantomData;
+    use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 
@@ -11,7 +11,7 @@ use typenum::{U0, U2};
 use crate::hash::{Algorithm, Hashable};
 use crate::proof::Proof;
 use crate::store::{
-    ExternalReader, LevelCacheStore, ReplicaConfig, Store, StoreConfig, VecStore, BUILD_CHUNK_NODES,
+    ExternalReader, LevelCacheStore, ReplicaConfig, Store, StoreConfig, VecStore, BUILD_CHUNK_NODES, Range,
 };
 
 // Number of batched nodes processed and stored together when
@@ -1204,9 +1204,20 @@ impl<
             Data::SubTree(_) => self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard),
             Data::BaseTree(_) => {
                 let mut nodes = Vec::new();
+                let mut ranges = Vec::new();
+                let mut total_buf_size = 0;
 
-                for challenge in challenges {
-                    let i = challenge;
+                struct ChallengeInfo {
+                    branches: usize,
+                    segment_width: usize,
+                    rows_to_discard: usize,
+                    partial_row_count: usize,
+                }
+
+                let mut infos = Vec::new();
+
+                for (index, challenge) in challenges.iter().enumerate() {
+                    let i = *challenge;
                     ensure!(
                         i < self.leafs,
                         "{} is out of bounds (max: {})",
@@ -1263,27 +1274,44 @@ impl<
                            self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                            cached_leafs, segment_width, segment_start, segment_end, i);
 
-                    let mut data_copy = vec![0; segment_width * E::byte_len()];
-                    ensure!(self.data.store().is_some(), "store data required");
+                    ranges.push(Range {
+                        index: i,
+                        start: segment_start,
+                        end: segment_end,
+                        buf_start: segment_width * E::byte_len() * index,
+                    });
 
-                    let store = self.data.store().unwrap();
-                    let err = store.read_range_into(
-                        segment_start,
-                        segment_end,
-                        &mut data_copy,
-                    );
+                    infos.push(ChallengeInfo {
+                        branches: branches,
+                        segment_width: segment_width,
+                        rows_to_discard: rows_to_discard,
+                        partial_row_count: partial_row_count,
+                    });
 
+                    total_buf_size += segment_width * E::byte_len();
+                }
+
+                let mut data_copy = vec![0; total_buf_size];
+                ensure!(self.data.store().is_some(), "store data required");
+
+                let store = self.data.store().unwrap();
+                let err = store.read_ranges_into(
+                    ranges.clone(),
+                    &mut data_copy,
+                );
+
+                for (i, range) in ranges.iter().enumerate() {
                     nodes.push(
                         LeafNodeData {
                             data: match err {
-                                Ok(_) => Ok(data_copy),
-                                Err(_) => Err(anyhow!("fail to read challenge {}", i)),
+                                Ok(_) => Ok((&data_copy[range.buf_start..]).to_vec()),
+                                Err(_) => Err(anyhow!("fail to read challenge {}", range.index)),
                             },
-                            challenge: i,
-                            branches: branches,
-                            partial_row_count: partial_row_count,
-                            segment_width: segment_width,
-                            rows_to_discard: Some(rows_to_discard),
+                            challenge: range.index,
+                            branches: infos[i].branches,
+                            partial_row_count: infos[i].partial_row_count,
+                            segment_width: infos[i].segment_width,
+                            rows_to_discard: Some(infos[i].rows_to_discard),
                             tree_index: 0,
                         }
                     )
