@@ -139,7 +139,9 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
             return Err(anyhow!("fail to read ranges {:?} from {}", obj_name, oss_config.url));
         }
 
-        sizes = Vec::with_capacity(datas.len());
+        for _i in 0..datas.len() {
+            sizes.push(Ok(0));
+        }
 
         for (i, data) in datas.iter().enumerate() {
             let mut buf_start = 0;
