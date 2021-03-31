@@ -160,6 +160,11 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                 return Err(anyhow!("fail to find ranges {:?} from {}", obj_name, oss_config.url));
             }
 
+            if data.data.len() == 0 {
+                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
+                return Err(anyhow!("fail to find ranges buf {:?} from {}", obj_name, oss_config.url));
+            }
+
             buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
             sizes[i] = Ok(buf_end - buf_start);
         }
