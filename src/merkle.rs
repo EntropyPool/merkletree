@@ -1276,8 +1276,6 @@ impl<
                 let tree = &sub_trees[tree_index];
                 let tree_leafs = tree.leafs();
 
-                info!("O CALC TOP: {}-{}", tree_index, i % tree_leafs);
-
                 // Get the leaf index within the sub-tree.
                 Ok(i % tree_leafs)
             },
@@ -1299,8 +1297,6 @@ impl<
                 let tree = &base_trees[tree_index];
                 let tree_leafs = tree.leafs();
 
-                info!("O CALC SUB: {}-{}", tree_index, i % tree_leafs);
-
                 // Get the leaf index within the sub-tree.
                 Ok(i % tree_leafs)
             },
@@ -1312,7 +1308,6 @@ impl<
         match &self.data {
             Data::TopTree(_) => Err(anyhow!("not base tree")),
             Data::BaseTree(_) => {
-                info!("O CALC BASE: {}-{}", 0, i);
                 Ok(i)
             },
             Data::SubTree(_) => Err(anyhow!("not base tree")),
@@ -1733,8 +1728,11 @@ impl<
                 sub_tree_ranges = self.caculate_tree_offset(sub_tree_ranges);
                 base_tree_ranges = self.caculate_tree_offset(base_tree_ranges);
 
+                info!("read top tree into bufs");
                 let top_tree_bufs = self.read_tree_ranges(top_tree_ranges.clone());
+                info!("read sub tree into bufs");
                 let sub_tree_bufs = self.read_tree_ranges(sub_tree_ranges.clone());
+                info!("read base tree into bufs");
                 let base_tree_bufs = self.read_tree_ranges(base_tree_ranges.clone());
 
                 let mut data_copy = vec![0; total_buf_size];
@@ -1920,7 +1918,11 @@ impl<
 
             for range in tree_range.ranges.clone() {
                 if range.range.index == leaf_index {
-                    return Ok(E::from_slice(&tree_bufs[i][range.range.buf_start..range.range.buf_end]));
+                    if tree_bufs[i].len() == 0 {
+                        return Err(anyhow!("fail to read tree buf {} - leaf {}", tree_index, leaf_index));
+                    } else {
+                        return Ok(E::from_slice(&tree_bufs[i][range.range.buf_start..range.range.buf_end]));
+                    }
                 }
             }
         }
@@ -2092,7 +2094,8 @@ impl<
             "Data slice must not have a top layer"
         );
 
-        lemma.push(self.read_at(j)?);
+        // lemma.push(self.read_at(j)?);
+        lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
         while base + 1 < self.len() {
             let hash_index = (j / branches) * branches;
             for k in hash_index..hash_index + branches {
@@ -2100,7 +2103,9 @@ impl<
                     let read_index = base + k;
                     lemma.push(
                         if read_index < data_width || read_index >= cache_index_start {
-                            self.read_at(base + k)?
+                            // self.read_at(base + k)?
+                            let e = self.read_from_leaf_data(base + k, leaf_data.clone())?;
+                            e
                         } else {
                             let read_index = partial_base + k - segment_shift;
                             partial_tree.read_at(read_index)?
@@ -2521,8 +2526,6 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
-                info!("O READ TOP: {}-{}", tree_index, leaf_index);
-
                 tree.read_at(leaf_index)
             }
             Data::SubTree(base_trees) => {
@@ -2538,13 +2541,10 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
-                info!("O READ SUB: {}-{}", tree_index, leaf_index);
-
                 tree.read_at(leaf_index)
             }
             Data::BaseTree(data) => {
                 // Read from the base layer tree data.
-                info!("O READ BASE: {}-{}", 0, i);
                 data.read_at(i)
             }
         }

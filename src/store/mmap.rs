@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use memmap::MmapMut;
 
-use log::info;
-
 use crate::merkle::Element;
 use crate::store::{Store, StoreConfig, Range};
 
@@ -34,8 +32,6 @@ impl<E: Element> Store<E> for MmapStore<E> {
     #[allow(unsafe_code)]
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
-
-        info!("new mmap with config {:?}", data_path);
 
         // If the specified file exists, load it from disk.
         if Path::new(&data_path).exists() {
