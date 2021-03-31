@@ -125,15 +125,16 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
 
     let mut sizes = Vec::new();
 
-    if oss_config.multi_ranges {
-        info!("multi read from oss {:?}, {}/{} [{}]", obj_name,
-               oss_config.url, oss_config.bucket_name, oss_config.multi_ranges);
+    if oss_config.multi_ranges && 1 < ranges.len() {
         let mut http_ranges = Vec::<ops::Range<usize>>::new();
         for range in ranges.clone() {
             http_ranges.push(ops::Range{ start: range.start, end: range.end });
         }
+        info!("multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
+               oss_config.url, oss_config.bucket_name,
+               oss_config.multi_ranges, http_ranges);
         let (datas, code) = rt.block_on(
-            bucket.get_object_multi_ranges(obj_name.to_str().unwrap(),http_ranges)).unwrap();
+            bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges)).unwrap();
         if code != 200 && code != 206 {
             warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
             return Err(anyhow!("fail to read ranges {:?} from {}", obj_name, oss_config.url));
