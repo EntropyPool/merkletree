@@ -20,7 +20,10 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES, read_from_oss, StoreOssConfig};
+use crate::store::{
+    ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES,
+    read_from_oss, StoreOssConfig, Range,
+};
 
 use s3::bucket::Bucket;
 use s3::creds::Credentials;
@@ -443,6 +446,33 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         );
 
         self.store_read_into(start, end, buf)
+    }
+
+    fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        // let mut results = Vec::new();
+
+        for range in &ranges {
+            let start = range.start * self.elem_len;
+            let end = range.end * self.elem_len;
+
+            let len = self.len * self.elem_len;
+            ensure!(start < len, "start out of range {} >= {}", start, len);
+            ensure!(end <= len, "end out of range {} > {}", end, len);
+            ensure!(
+                start <= self.data_width * self.elem_len || start >= self.cache_index_start,
+                "out of bounds"
+            );
+
+            /*
+            match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
+                Ok(_) => results.push(Ok(range.end - range.start)),
+                Err(_) => results.push(Err(anyhow!("fail to read range"))),
+            };
+            */
+        }
+
+        self.store_read_ranges_into(ranges, buf)
+        // Ok(results)
     }
 
     fn read_range(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
@@ -883,6 +913,79 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         );
 
         Ok(E::from_slice(&self.store_read_range_internal(start, end)?))
+    }
+
+    pub fn store_read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        let mut reader_ranges = Vec::new();
+        let mut direct_ranges = Vec::new();
+        let mut direct_sizes = Vec::new();
+
+        for range in ranges.clone() {
+            let start = range.start * self.elem_len;
+            let end = range.end * self.elem_len;
+            let read_len = end - start;
+
+            ensure!(
+                start <= self.data_width * self.elem_len || start >= self.cache_index_start,
+                "Invalid read start"
+            );
+
+            let mut range = range.clone();
+            range.start = start;
+            range.end = end;
+
+            if start < self.data_width * self.elem_len && self.reader.is_some() {
+                reader_ranges.push(range);
+            } else {
+                direct_ranges.push(range);
+                match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
+                    Err(_) => direct_sizes.push(Err(anyhow!("fail to read file"))),
+                    Ok(_) => direct_sizes.push(Ok(read_len)),
+                }
+            }
+        }
+
+        let reader_sizes = self.reader
+            .as_ref()
+            .unwrap()
+            .read_ranges(reader_ranges.clone(), buf)
+            .with_context(|| {
+                format!(
+                    "failed to read multi range",
+                )
+            })?;
+
+        let mut return_sizes = Vec::new();
+
+        for range in &ranges {
+            let mut inserted = false;
+            for (j, direct_range) in direct_ranges.iter().enumerate() {
+                if direct_range.index == range.index {
+                    match direct_sizes[j] {
+                        Ok(size) => return_sizes.push(Ok(size)),
+                        Err(_) => return_sizes.push(Err(anyhow!("fail to read range"))),
+                    }
+                    inserted = true;
+                    break;
+                }
+            }
+
+            if inserted {
+                continue;
+            }
+
+            for (j, reader_range) in reader_ranges.iter().enumerate() {
+                if reader_range.index == range.index {
+                    match reader_sizes[j] {
+                        Ok(size) => return_sizes.push(Ok(size)),
+                        Err(_) => return_sizes.push(Err(anyhow!("fail to read range"))),
+                    }
+                    break;
+                }
+            }
+        }
+
+        Ok(return_sizes)
     }
 
     pub fn store_read_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {

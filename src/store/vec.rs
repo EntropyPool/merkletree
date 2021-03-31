@@ -3,7 +3,7 @@ use std::ops::{self, Index};
 use anyhow::Result;
 
 use crate::merkle::Element;
-use crate::store::{Store, StoreConfig};
+use crate::store::{Store, StoreConfig, Range};
 
 #[derive(Debug, Clone, Default)]
 pub struct VecStore<E: Element>(Vec<E>);
@@ -93,6 +93,10 @@ impl<E: Element> Store<E> for VecStore<E> {
     fn read_into(&self, index: usize, buf: &mut [u8]) -> Result<()> {
         self.0[index].copy_to_slice(buf);
         Ok(())
+    }
+
+    fn read_ranges_into(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        unimplemented!("Not required here");
     }
 
     fn read_range_into(&self, _start: usize, _end: usize, _buf: &mut [u8]) -> Result<()> {

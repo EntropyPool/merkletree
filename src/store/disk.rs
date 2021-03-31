@@ -19,7 +19,7 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES};
+use crate::store::{Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES, Range};
 
 /// The Disk-only store is used to reduce memory to the minimum at the
 /// cost of build time performance. Most of its I/O logic is in the
@@ -204,6 +204,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
         ensure!(end <= len, "end out of range {} > {}", end, len);
 
         self.store_read_into(start, end, buf)
+    }
+
+    fn read_ranges_into(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        unimplemented!("Not required here");
     }
 
     fn read_range_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
