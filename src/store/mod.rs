@@ -162,7 +162,9 @@ impl ExternalReader<std::fs::File> {
                 } else {
                     let mut sizes = Vec::new();
                     for range in ranges {
-                        trace!("multi read from local: start {}, end {}, path {}", range.start, range.end, path);
+                        trace!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
+                               range.start, range.buf_start, range.end, range.buf_end,
+                               path, buf.len(),range.index);
                         let reader = OpenOptions::new().read(true).open(&path)?;
                         let read_len = range.end - range.start;
                         reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_end])?;

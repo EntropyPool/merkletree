@@ -1276,6 +1276,8 @@ impl<
                 let tree = &sub_trees[tree_index];
                 let tree_leafs = tree.leafs();
 
+                info!("O CALC TOP: {}-{}", tree_index, i % tree_leafs);
+
                 // Get the leaf index within the sub-tree.
                 Ok(i % tree_leafs)
             },
@@ -1297,6 +1299,8 @@ impl<
                 let tree = &base_trees[tree_index];
                 let tree_leafs = tree.leafs();
 
+                info!("O CALC SUB: {}-{}", tree_index, i % tree_leafs);
+
                 // Get the leaf index within the sub-tree.
                 Ok(i % tree_leafs)
             },
@@ -1307,7 +1311,10 @@ impl<
     pub fn get_base_tree_leaf_index(&self, i: usize) -> Result<usize> {
         match &self.data {
             Data::TopTree(_) => Err(anyhow!("not base tree")),
-            Data::BaseTree(_) => Ok(i),
+            Data::BaseTree(_) => {
+                info!("O CALC BASE: {}-{}", 0, i);
+                Ok(i)
+            },
             Data::SubTree(_) => Err(anyhow!("not base tree")),
         }
     }
@@ -1382,20 +1389,26 @@ impl<
                 if k != j {
                     let read_index = base + k;
                     if read_index < data_width || read_index >= cache_index_start {
-                        match self.leaf_index_to_segment_range(tree_index_getter, leaf_index_getter, i) {
+                        match self.leaf_index_to_segment_range(tree_index_getter, leaf_index_getter, base + k) {
                             Ok((tree_index, segment_range)) => {
                                 let mut segment_range = segment_range.clone();
                                 segment_range.segment_width = segment_width;
+
+                                let mut inserted = false;
                                 for range in ranges.iter_mut() {
                                     if range.tree_index == tree_index {
                                         range.ranges.push(segment_range.clone());
-                                        ()
+                                        inserted = true;
+                                        break;
                                     }
                                 }
-                                ranges.push(TreeRanges {
-                                    tree_index: tree_index,
-                                    ranges: vec![segment_range],
-                                });
+
+                                if !inserted {
+                                    ranges.push(TreeRanges {
+                                        tree_index: tree_index,
+                                        ranges: vec![segment_range],
+                                    });
+                                }
                             },
                             Err(_) => {},
                         }
@@ -1418,11 +1431,11 @@ impl<
         branches: usize,
         rows_to_discard: usize,
     ) -> Result<Vec<TreeRanges>> {
-        let tree_index_getter = |i| -> Result<usize> {
-            self.get_top_tree_index(i)
+        let tree_index_getter = |j| -> Result<usize> {
+            self.get_top_tree_index(j)
         };
-        let leaf_index_getter = |i| -> Result<usize> {
-            self.get_top_tree_leaf_index(i)
+        let leaf_index_getter = |j| -> Result<usize> {
+            self.get_top_tree_leaf_index(j)
         };
 
         self.get_tree_ranges(
@@ -1440,11 +1453,11 @@ impl<
         branches: usize,
         rows_to_discard: usize,
     ) -> Result<Vec<TreeRanges>> {
-        let tree_index_getter = |i| -> Result<usize> {
-            self.get_sub_tree_index(i)
+        let tree_index_getter = |j| -> Result<usize> {
+            self.get_sub_tree_index(j)
         };
-        let leaf_index_getter = |i| -> Result<usize> {
-            self.get_sub_tree_leaf_index(i)
+        let leaf_index_getter = |j| -> Result<usize> {
+            self.get_sub_tree_leaf_index(j)
         };
 
         self.get_tree_ranges(
@@ -1518,7 +1531,7 @@ impl<
             for range in tree_range.ranges {
                 let mut range = range.clone();
                 range.range.buf_start = total_buf_size;
-                total_buf_size += range.segment_width * E::byte_len();
+                total_buf_size += E::byte_len();
                 range.range.buf_end = total_buf_size;
                 leaf_ranges.push(range);
             }
@@ -1557,9 +1570,9 @@ impl<
                         }
                     };
                 },
-                Err(_) => {
+                Err(e) => {
                     error_happen = true;
-                    error!("fail to read ranges");
+                    error!("fail to read ranges: {}", e);
                 }
             };
 
@@ -2508,6 +2521,8 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
+                info!("O READ TOP: {}-{}", tree_index, leaf_index);
+
                 tree.read_at(leaf_index)
             }
             Data::SubTree(base_trees) => {
@@ -2523,10 +2538,13 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
+                info!("O READ SUB: {}-{}", tree_index, leaf_index);
+
                 tree.read_at(leaf_index)
             }
             Data::BaseTree(data) => {
                 // Read from the base layer tree data.
+                info!("O READ BASE: {}-{}", 0, i);
                 data.read_at(i)
             }
         }

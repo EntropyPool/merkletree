@@ -927,6 +927,10 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 "Invalid read start"
             );
 
+            let mut range = range.clone();
+            range.start = start;
+            range.end = end;
+
             if start < self.data_width * self.elem_len && self.reader.is_some() {
                 reader_ranges.push(range);
             } else {
