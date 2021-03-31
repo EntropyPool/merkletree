@@ -125,17 +125,55 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
 
     let mut sizes = Vec::new();
 
-    for range in ranges {
-        trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-        let (data, code) = rt.block_on(
-            bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
+    if oss_config.multi_ranges {
+        for range in ranges {
+            trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+            let (data, code) = rt.block_on(
+                bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
+            if code != 200 && code != 206 {
+                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
+                sizes.push(Err(anyhow!("cannot get file")));
+                continue;
+            }
+            buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
+            sizes.push(Ok(range.end - range.start));
+        }
+    } else {
+        let mut http_ranges = Vec::<ops::Range<usize>>::new();
+        for range in ranges.clone() {
+            http_ranges.push(ops::Range{ start: range.start, end: range.end });
+        }
+        let (datas, code) = rt.block_on(
+            bucket.get_object_multi_ranges(obj_name.to_str().unwrap(),http_ranges)).unwrap();
         if code != 200 && code != 206 {
             warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-            sizes.push(Err(anyhow!("cannot get file")));
-            continue;
+            return Err(anyhow!("fail to read ranges {:?} from {}", obj_name, oss_config.url));
         }
-        buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
-        sizes.push(Ok(range.end - range.start));
+
+        sizes = Vec::with_capacity(datas.len());
+
+        for (i, data) in datas.iter().enumerate() {
+            let mut buf_start = 0;
+            let mut buf_end = 0;
+            let mut found = false;
+
+            for range in ranges.clone() {
+                if range.start == data.range.start {
+                    buf_start = range.buf_start;
+                    buf_end = range.buf_end;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
+                return Err(anyhow!("fail to find ranges {:?} from {}", obj_name, oss_config.url));
+            }
+
+            buf[buf_start..buf_end].copy_from_slice(&data.data[0..]);
+            sizes[i] = Ok(buf_end - buf_start);
+        }
     }
     Ok(sizes)
 }
