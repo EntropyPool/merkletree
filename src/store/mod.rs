@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::{trace, warn};
+use log::{trace, warn, info};
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
@@ -126,19 +126,8 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
     let mut sizes = Vec::new();
 
     if oss_config.multi_ranges {
-        for range in ranges {
-            trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-            let (data, code) = rt.block_on(
-                bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
-            if code != 200 && code != 206 {
-                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-                sizes.push(Err(anyhow!("cannot get file")));
-                continue;
-            }
-            buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
-            sizes.push(Ok(range.end - range.start));
-        }
-    } else {
+        info!("multi read from oss {:?}, {}/{} [{}]", obj_name,
+               oss_config.url, oss_config.bucket_name, oss_config.multi_ranges);
         let mut http_ranges = Vec::<ops::Range<usize>>::new();
         for range in ranges.clone() {
             http_ranges.push(ops::Range{ start: range.start, end: range.end });
@@ -171,8 +160,21 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                 return Err(anyhow!("fail to find ranges {:?} from {}", obj_name, oss_config.url));
             }
 
-            buf[buf_start..buf_end].copy_from_slice(&data.data[0..]);
+            buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
             sizes[i] = Ok(buf_end - buf_start);
+        }
+    } else {
+        for range in ranges {
+            trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+            let (data, code) = rt.block_on(
+                bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
+            if code != 200 && code != 206 {
+                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
+                sizes.push(Err(anyhow!("cannot get file")));
+                continue;
+            }
+            buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
+            sizes.push(Ok(range.end - range.start));
         }
     }
     Ok(sizes)
