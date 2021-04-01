@@ -1173,6 +1173,7 @@ impl<
             ensure!(self.data.sub_trees().is_some(), "sub trees required");
             let trees = &self.data.sub_trees().unwrap();
             let tree_index = i / (self.leafs / Arity::to_usize());
+
             let tree = &trees[tree_index];
             let tree_leafs = tree.leafs();
 
@@ -1181,6 +1182,8 @@ impl<
             let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
 
             node[0].tree_index = tree_index;
+            node[0].challenge = i;
+
             nodes.push(node[0].clone());
         }
 
@@ -1216,6 +1219,8 @@ impl<
             let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
 
             node[0].tree_index = tree_index;
+            node[0].challenge = i;
+
             nodes.push(node[0].clone());
         }
 
@@ -1587,8 +1592,12 @@ impl<
         rows_to_discard: Option<usize>,
     ) -> Result<Vec<LeafNodeData>> {
         match &self.data {
-            Data::TopTree(_) => self.read_top_tree_leafs::<TopTreeArity>(challenges, rows_to_discard),
-            Data::SubTree(_) => self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard),
+            Data::TopTree(_) => {
+                self.read_top_tree_leafs::<TopTreeArity>(challenges, rows_to_discard)
+            },
+            Data::SubTree(_) => {
+                self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard)
+            },
             Data::BaseTree(_) => {
                 let mut nodes = Vec::new();
 
@@ -1660,7 +1669,7 @@ impl<
                     let segment_start = (i / segment_width) * segment_width;
                     let segment_end = segment_start + segment_width;
 
-                    debug!("leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
+                    info!("batch leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
                             partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
                            self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                            cached_leafs, segment_width, segment_start, segment_end, i);
@@ -1785,16 +1794,20 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn gen_cached_top_tree_proof_with_leaf_data<Arity: Unsigned>(
         &self,
+        i: usize,
         leaf_data: LeafNodeData,
     ) -> Result<Proof<E, BaseTreeArity>> {
-        let tree_index = leaf_data.tree_index;
+        // let tree_index = leaf_data.tree_index;
 
+        let tree_index = i / (self.leafs / Arity::to_usize());
         let trees = &self.data.sub_trees().unwrap();
         let tree = &trees[tree_index];
+        let tree_leafs = tree.leafs();
+        let leaf_index = i % tree_leafs;
 
         // Generate the proof that will validate to the provided
         // sub-tree root (note the branching factor of B).
-        let sub_tree_proof = tree.gen_cached_proof_with_leaf_data(leaf_data)?;
+        let sub_tree_proof = tree.gen_cached_proof_with_leaf_data(leaf_index, leaf_data)?;
 
         // Construct the top layer proof.  'lemma' length is
         // top_layer_nodes - 1 + root == top_layer_nodes
@@ -1809,8 +1822,6 @@ impl<
         lemma.push(self.root());
         path.push(tree_index);
 
-        info!("lemma {:?}, path {:?}", lemma, path);
-
         // Generate the final compound tree proof which is composed of
         // a sub-tree proof of branching factor B and a top-level
         // proof with a branching factor of SubTreeArity.
@@ -1820,16 +1831,20 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn gen_cached_sub_tree_proof_with_leaf_data<Arity: Unsigned>(
         &self,
+        i: usize,
         leaf_data: LeafNodeData,
     ) -> Result<Proof<E, BaseTreeArity>> {
-        let tree_index = leaf_data.tree_index;
+        // let tree_index = leaf_data.tree_index;
 
+        let tree_index = i / (self.leafs / Arity::to_usize());
         let trees = &self.data.base_trees().unwrap();
         let tree = &trees[tree_index];
+        let tree_leafs = tree.leafs();
+        let leaf_index = i % tree_leafs;
 
         // Generate the proof that will validate to the provided
         // sub-tree root (note the branching factor of B).
-        let sub_tree_proof = tree.gen_cached_proof_with_leaf_data(leaf_data)?;
+        let sub_tree_proof = tree.gen_cached_proof_with_leaf_data(leaf_index, leaf_data)?;
 
         // Construct the top layer proof.  'lemma' length is
         // top_layer_nodes - 1 + root == top_layer_nodes
@@ -1853,17 +1868,17 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn gen_cached_proof_with_leaf_data(
         &self,
+        i: usize,
         leaf_data: LeafNodeData,
     ) -> Result<Proof<E, BaseTreeArity>> {
         match &self.data {
-            Data::TopTree(_) => self.gen_cached_top_tree_proof_with_leaf_data::<TopTreeArity>(leaf_data),
-            Data::SubTree(_) => self.gen_cached_sub_tree_proof_with_leaf_data::<SubTreeArity>(leaf_data),
+            Data::TopTree(_) => self.gen_cached_top_tree_proof_with_leaf_data::<TopTreeArity>(i, leaf_data),
+            Data::SubTree(_) => self.gen_cached_sub_tree_proof_with_leaf_data::<SubTreeArity>(i, leaf_data),
             Data::BaseTree(_) => {
                 let segment_width = leaf_data.segment_width;
                 let branches = leaf_data.branches;
                 let partial_row_count = leaf_data.partial_row_count;
                 let mut data_copy = leaf_data.clone().data.unwrap();
-                let i = leaf_data.challenge;
 
                 let partial_store = VecStore::new_from_slice(segment_width, &data_copy)?;
                 ensure!(
@@ -1888,10 +1903,10 @@ impl<
 
                 // Generate entire proof with access to the base data, the
                 // cached data, and the partial tree.
-                // let proof = self.gen_proof_with_partial_tree(i, rows_to_discard, &partial_tree)?;
-                let proof = self.gen_proof_with_partial_tree_with_leaf_data(leaf_data.clone(), &partial_tree)?;
+                // let proof = self.gen_proof_with_partial_tree(i, leaf_data.rows_to_discard.unwrap(), &partial_tree)?;
+                let proof = self.gen_proof_with_partial_tree_with_leaf_data(i, leaf_data.clone(), &partial_tree)?;
 
-                debug!(
+                info!(
                     "generated partial_tree of row_count {} and len {} with {} branches for proof at {} with leaf data",
                     partial_tree.row_count,
                     partial_tree.len(),
@@ -2016,10 +2031,10 @@ impl<
     /// partial tree for lookups where data is otherwise unavailable.
     fn gen_proof_with_partial_tree_with_leaf_data(
         &self,
+        i: usize,
         leaf_data: LeafNodeData,
         partial_tree: &MerkleTree<E, A, VecStore<E>, BaseTreeArity>,
     ) -> Result<Proof<E, BaseTreeArity>> {
-        let i = leaf_data.challenge;
         let rows_to_discard = leaf_data.rows_to_discard.unwrap();
         ensure!(
             i < self.leafs,
@@ -2094,8 +2109,8 @@ impl<
             "Data slice must not have a top layer"
         );
 
-        // lemma.push(self.read_at(j)?);
-        lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
+        lemma.push(self.read_at(j)?);
+        // lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
         while base + 1 < self.len() {
             let hash_index = (j / branches) * branches;
             for k in hash_index..hash_index + branches {
@@ -2103,9 +2118,8 @@ impl<
                     let read_index = base + k;
                     lemma.push(
                         if read_index < data_width || read_index >= cache_index_start {
-                            // self.read_at(base + k)?
-                            let e = self.read_from_leaf_data(base + k, leaf_data.clone())?;
-                            e
+                            self.read_at(base + k)?
+                            // self.read_from_leaf_data(base + k, leaf_data.clone())?
                         } else {
                             let read_index = partial_base + k - segment_shift;
                             partial_tree.read_at(read_index)?
@@ -2159,8 +2173,12 @@ impl<
         rows_to_discard: Option<usize>,
     ) -> Result<Proof<E, BaseTreeArity>> {
         match &self.data {
-            Data::TopTree(_) => self.gen_cached_top_tree_proof::<TopTreeArity>(i, rows_to_discard),
-            Data::SubTree(_) => self.gen_cached_sub_tree_proof::<SubTreeArity>(i, rows_to_discard),
+            Data::TopTree(_) => {
+                self.gen_cached_top_tree_proof::<TopTreeArity>(i, rows_to_discard)
+            },
+            Data::SubTree(_) => {
+                self.gen_cached_sub_tree_proof::<SubTreeArity>(i, rows_to_discard)
+            },
             Data::BaseTree(_) => {
                 ensure!(
                     i < self.leafs,
@@ -2225,7 +2243,7 @@ impl<
                     &mut data_copy,
                 )?;
 
-                debug!("leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
+                info!("orig leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
                         partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
                        self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                        cached_leafs, segment_width, segment_start, segment_end, i);

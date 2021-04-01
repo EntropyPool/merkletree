@@ -100,7 +100,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
     let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
     let mut rt = Runtime::new()?;
 
-    trace!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
+    info!("read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
     let (data, code) = rt.block_on(
         bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
     ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
@@ -173,7 +173,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
         }
     } else {
         for range in ranges {
-            trace!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+            info!("read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
             let (data, code) = rt.block_on(
                 bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
             if code != 200 && code != 206 {
@@ -198,7 +198,7 @@ impl ExternalReader<std::fs::File> {
                 if oss {
                     read_from_oss(start, end, buf, path, oss_config)?;
                 } else {
-                    trace!("read from local: start {}, end {}, path {}", start, end, path);
+                    info!("read from local: start {}, end {}, path {}", start, end, path);
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
                 }
@@ -210,7 +210,7 @@ impl ExternalReader<std::fs::File> {
                 } else {
                     let mut sizes = Vec::new();
                     for range in ranges {
-                        trace!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
+                        info!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
                                range.start, range.buf_start, range.end, range.buf_end,
                                path, buf.len(),range.index);
                         let reader = OpenOptions::new().read(true).open(&path)?;

@@ -80,6 +80,7 @@ impl<E: Element, R: Read + Send + Sync> fmt::Debug for LevelCacheStore<E, R> {
             .field("loaded_from_disk", &self.loaded_from_disk)
             .field("cache_index_start", &self.cache_index_start)
             .field("store_size", &self.store_size)
+            .field("path", &self.path)
             .finish()
     }
 }
