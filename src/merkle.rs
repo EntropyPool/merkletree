@@ -2109,8 +2109,8 @@ impl<
             "Data slice must not have a top layer"
         );
 
-        lemma.push(self.read_at(j)?);
-        // lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
+        // lemma.push(self.read_at(j)?);
+        lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
         while base + 1 < self.len() {
             let hash_index = (j / branches) * branches;
             for k in hash_index..hash_index + branches {
@@ -2118,8 +2118,8 @@ impl<
                     let read_index = base + k;
                     lemma.push(
                         if read_index < data_width || read_index >= cache_index_start {
-                            self.read_at(base + k)?
-                            // self.read_from_leaf_data(base + k, leaf_data.clone())?
+                            // self.read_at(base + k)?
+                            self.read_from_leaf_data(base + k, leaf_data.clone())?
                         } else {
                             let read_index = partial_base + k - segment_shift;
                             partial_tree.read_at(read_index)?
