@@ -220,9 +220,23 @@ impl Clone for TreeRanges {
     }
 }
 
+#[derive(Clone)]
+struct TreeLeafData {
+    base_data: Vec<Vec<u8>>,
+    base_ranges: Vec<Range>,
+
+    top_tree_ranges: Vec<TreeRanges>,
+    sub_tree_ranges: Vec<TreeRanges>,
+    base_tree_ranges: Vec<TreeRanges>,
+    top_tree_bufs: Vec<Vec<u8>>,
+    sub_tree_bufs: Vec<Vec<u8>>,
+    base_tree_bufs: Vec<Vec<u8>>,
+}
+
 #[derive(Debug)]
 pub struct LeafNodeData {
     pub data: Result<Vec<u8>>,
+    pub range: Range,
     pub challenge: usize,
     pub partial_row_count: usize,
     pub segment_width: usize,
@@ -245,6 +259,7 @@ impl Clone for LeafNodeData {
                 Err(_) => Err(anyhow!("tree data error")),
             },
             challenge: self.challenge,
+            range: self.range.clone(),
             partial_row_count: self.partial_row_count,
             segment_width: self.segment_width,
             branches: self.branches,
@@ -1156,6 +1171,8 @@ impl<
         &self,
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
+        fill_buf: bool,
+        tree_leafs_data: Option<&TreeLeafData>,
     ) -> Result<Vec<LeafNodeData>> {
         ensure!(Arity::to_usize() != 0, "Invalid top-tree arity");
 
@@ -1179,7 +1196,15 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
+            let mut node = tree.read_leafs_with_fill_buf(
+                vec![leaf_index],
+                rows_to_discard,
+                fill_buf,
+                match tree_leafs_data {
+                    Some(data) => Some(data),
+                    None => None,
+                },
+            )?;
 
             node[0].tree_index = tree_index;
             node[0].challenge = i;
@@ -1194,6 +1219,8 @@ impl<
         &self,
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
+        fill_buf: bool,
+        tree_leafs_data: Option<&TreeLeafData>,
     ) -> Result<Vec<LeafNodeData>> {
         ensure!(Arity::to_usize() != 0, "Invalid sub-tree arity");
 
@@ -1216,7 +1243,15 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let mut node = tree.read_leafs(vec![leaf_index], rows_to_discard)?;
+            let mut node = tree.read_leafs_with_fill_buf(
+                vec![leaf_index],
+                rows_to_discard,
+                fill_buf,
+                match tree_leafs_data {
+                    Some(data) => Some(data),
+                    None => None,
+                },
+            )?;
 
             node[0].tree_index = tree_index;
             node[0].challenge = i;
@@ -1591,12 +1626,79 @@ impl<
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
     ) -> Result<Vec<LeafNodeData>> {
+        let leafs_data = self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, false, None)?;
+        let tree_leafs_data = self.read_tree_leafs_data(leafs_data)?;
+        self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, true, Some(&tree_leafs_data))
+    }
+
+    fn read_tree_leafs_data(
+        &self,
+        leafs_data: Vec<LeafNodeData>,
+    ) -> Result<TreeLeafData> {
+        let mut base_ranges = Vec::new();
+        let mut top_tree_ranges = Vec::new();
+        let mut sub_tree_ranges = Vec::new();
+        let mut base_tree_ranges = Vec::new();
+        let mut total_buf_size = 0;
+
+        for data in leafs_data {
+            base_ranges.push(data.range);
+            total_buf_size += data.range.buf_end - data.range.buf_start;
+            top_tree_ranges.extend(data.top_tree_ranges);
+            sub_tree_ranges.extend(data.sub_tree_ranges);
+            base_tree_ranges.extend(data.base_tree_ranges);
+        }
+
+        top_tree_ranges = self.merge_tree_ranges(top_tree_ranges);
+        sub_tree_ranges = self.merge_tree_ranges(sub_tree_ranges);
+        base_tree_ranges = self.merge_tree_ranges(base_tree_ranges);
+
+        info!("read top tree into bufs");
+        let top_tree_bufs = self.read_tree_ranges(top_tree_ranges.clone());
+        info!("read sub tree into bufs");
+        let sub_tree_bufs = self.read_tree_ranges(sub_tree_ranges.clone());
+        info!("read base tree into bufs");
+        let base_tree_bufs = self.read_tree_ranges(base_tree_ranges.clone());
+
+        let mut data_copy = vec![0; total_buf_size];
+        ensure!(self.data.store().is_some(), "store data required");
+
+        let store = self.data.store().unwrap();
+        let results = store.read_ranges_into(base_ranges.clone(), &mut data_copy)?;
+
+        let mut base_data = Vec::new();
+        for (i, result) in results.iter().enumerate() {
+            match result {
+                Ok(_) => base_data.push(data_copy[base_ranges[i].buf_start..base_ranges[i].buf_end].to_vec()),
+                Err(_) => base_data.push(Vec::new()),
+            }
+        }
+
+        Ok(TreeLeafData {
+            base_data: base_data,
+            base_ranges: base_ranges,
+            top_tree_ranges: top_tree_ranges,
+            top_tree_bufs: top_tree_bufs,
+            sub_tree_ranges: sub_tree_ranges,
+            sub_tree_bufs: sub_tree_bufs,
+            base_tree_ranges: base_tree_ranges,
+            base_tree_bufs: base_tree_bufs,
+        })
+    }
+
+    fn read_leafs_with_fill_buf(
+        &self,
+        challenges: Vec<usize>,
+        rows_to_discard: Option<usize>,
+        fill_buf: bool,
+        tree_leafs_data: Option<&TreeLeafData>,
+    ) -> Result<Vec<LeafNodeData>> {
         match &self.data {
             Data::TopTree(_) => {
-                self.read_top_tree_leafs::<TopTreeArity>(challenges, rows_to_discard)
+                self.read_top_tree_leafs::<TopTreeArity>(challenges, rows_to_discard, fill_buf, tree_leafs_data)
             },
             Data::SubTree(_) => {
-                self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard)
+                self.read_sub_tree_leafs::<SubTreeArity>(challenges, rows_to_discard, fill_buf, tree_leafs_data)
             },
             Data::BaseTree(_) => {
                 let mut nodes = Vec::new();
@@ -1674,28 +1776,6 @@ impl<
                            self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                            cached_leafs, segment_width, segment_start, segment_end, i);
 
-                    /*
-                    let mut data_copy = vec![0; segment_width * E::byte_len()];
-                    let store = self.data.store().unwrap();
-                    store.read_range_into(
-                        segment_start,
-                        segment_end,
-                        &mut data_copy,
-                    )?;
-
-                    nodes.push(
-                        LeafNodeData {
-                            data: Ok(data_copy),
-                            challenge: challenge,
-                            branches: branches,
-                            partial_row_count: partial_row_count,
-                            segment_width: segment_width,
-                            rows_to_discard: Some(rows_to_discard),
-                            tree_index: 0,
-                        }
-                    )
-                    */
-
                     let buf_end = total_buf_size + segment_width * E::byte_len();
 
                     ranges.push(Range {
@@ -1737,6 +1817,7 @@ impl<
                 sub_tree_ranges = self.caculate_tree_offset(sub_tree_ranges);
                 base_tree_ranges = self.caculate_tree_offset(base_tree_ranges);
 
+                /*
                 info!("read top tree into bufs");
                 let top_tree_bufs = self.read_tree_ranges(top_tree_ranges.clone());
                 info!("read sub tree into bufs");
@@ -1753,35 +1834,59 @@ impl<
                     ranges.clone(),
                     &mut data_copy,
                 )?;
+                */
 
                 for (i, range) in ranges.iter().enumerate() {
-                    /*
-                    store.read_range_into(
-                        range.start,
-                        range.end,
-                        &mut data_copy[range.buf_start..range.buf_end],
-                    )?;
-                    */
-
                     nodes.push(
                         LeafNodeData {
+                            /*
                             data: match results[i] {
                                 Ok(_) => Ok((&data_copy[range.buf_start..range.buf_end]).to_vec()),
                                 Err(_) => Err(anyhow!("fail to read challenge {}", range.index)),
                             },
-                            // data: Ok((&data_copy[range.buf_start..range.buf_end]).to_vec()),
+                            */
+                            data: if fill_buf {
+                                self.read_base_leaf_data_from_tree_leafs_data(range.index, tree_leafs_data.unwrap())
+                            } else {
+                                Err(anyhow!("fail to read challenge {}", range.index))
+                            },
                             challenge: range.index,
+                            range: range.clone(),
                             branches: infos[i].branches,
                             partial_row_count: infos[i].partial_row_count,
                             segment_width: infos[i].segment_width,
                             rows_to_discard: Some(infos[i].rows_to_discard),
                             tree_index: 0,
-                            top_tree_ranges: top_tree_ranges.clone(),
-                            sub_tree_ranges: sub_tree_ranges.clone(),
-                            base_tree_ranges: base_tree_ranges.clone(),
-                            top_tree_bufs: top_tree_bufs.clone(),
-                            sub_tree_bufs: sub_tree_bufs.clone(),
-                            base_tree_bufs: base_tree_bufs.clone(),
+                            top_tree_ranges: if fill_buf {
+                                tree_leafs_data.unwrap().top_tree_ranges.clone()
+                            } else {
+                                top_tree_ranges.clone()
+                            },
+                            sub_tree_ranges: if fill_buf {
+                                tree_leafs_data.unwrap().sub_tree_ranges.clone()
+                            } else {
+                                sub_tree_ranges.clone()
+                            },
+                            base_tree_ranges: if fill_buf {
+                                tree_leafs_data.unwrap().base_tree_ranges.clone()
+                            } else {
+                                base_tree_ranges.clone()
+                            },
+                            top_tree_bufs: if fill_buf {
+                                tree_leafs_data.unwrap().top_tree_bufs.clone()
+                            } else {
+                                Vec::new()
+                            },
+                            sub_tree_bufs: if fill_buf {
+                                tree_leafs_data.unwrap().sub_tree_bufs.clone()
+                            } else {
+                                Vec::new()
+                            },
+                            base_tree_bufs: if fill_buf {
+                                tree_leafs_data.unwrap().base_tree_bufs.clone()
+                            } else {
+                                Vec::new()
+                            },
                         }
                     )
                 }
@@ -1917,6 +2022,19 @@ impl<
                 Ok(proof)
             }
         }
+    }
+
+    fn read_base_leaf_data_from_tree_leafs_data(
+        &self,
+        i: usize,
+        tree_leafs_data: &TreeLeafData,
+    ) -> Result<Vec<u8>> {
+        for (idx, range) in tree_leafs_data.base_ranges.iter().enumerate() {
+            if range.index == i {
+                return Ok(tree_leafs_data.base_data[idx].clone());
+            }
+        }
+        Err(anyhow!("fail to find challenge {}", i))
     }
 
     fn read_from_tree_ranges_bufs(

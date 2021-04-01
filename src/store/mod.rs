@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::{trace, warn, info};
+use log::{warn, info};
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
