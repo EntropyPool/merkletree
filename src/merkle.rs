@@ -207,7 +207,6 @@ pub struct SegmentRange {
 
 #[derive(Debug)]
 pub struct TreeRanges {
-    pub tree_index: usize,
     pub path: String,
     pub ranges: Vec<SegmentRange>,
 }
@@ -215,7 +214,6 @@ pub struct TreeRanges {
 impl Clone for TreeRanges {
     fn clone(&self) ->TreeRanges {
         TreeRanges {
-            tree_index: self.tree_index,
             path: self.path.clone(),
             ranges: self.ranges.clone(),
         }
@@ -238,7 +236,6 @@ pub struct LeafNodeData {
     pub segment_width: usize,
     pub branches: usize,
     pub rows_to_discard: Option<usize>,
-    pub tree_index: usize,
     tree_leafs_data: TreeLeafData,
 }
 
@@ -256,7 +253,6 @@ impl Clone for LeafNodeData {
             segment_width: self.segment_width,
             branches: self.branches,
             rows_to_discard: self.rows_to_discard,
-            tree_index: self.tree_index,
             tree_leafs_data: self.tree_leafs_data.clone(),
         };
 
@@ -1187,7 +1183,7 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let (mut node, store, tree_range) = tree.read_leafs_with_fill_buf(
+            let (mut node, store, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
                 vec![leaf_index],
                 rows_to_discard,
                 fill_buf,
@@ -1195,15 +1191,13 @@ impl<
                     Some(data) => Some(data),
                     None => None,
                 },
-                tree_index,
             )?;
 
-            node[0].tree_index = tree_index;
             node[0].challenge = i;
 
             nodes.push(node[0].clone());
             stores.push(store[0].clone());
-            tree_ranges.push(tree_range[0].clone());
+            tree_ranges.extend(leaf_tree_ranges);
         }
 
         Ok((nodes, stores, tree_ranges))
@@ -1241,7 +1235,7 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let (mut node, store, tree_range) = tree.read_leafs_with_fill_buf(
+            let (mut node, store, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
                 vec![leaf_index],
                 rows_to_discard,
                 fill_buf,
@@ -1249,15 +1243,13 @@ impl<
                     Some(data) => Some(data),
                     None => None,
                 },
-                tree_index,
             )?;
 
-            node[0].tree_index = tree_index;
             node[0].challenge = i;
 
             nodes.push(node[0].clone());
             stores.push(store[0].clone());
-            tree_ranges.push(tree_range[0].clone());
+            tree_ranges.extend(leaf_tree_ranges.clone());
         }
 
         Ok((nodes, stores, tree_ranges))
@@ -1357,34 +1349,22 @@ impl<
 
     fn leaf_index_to_segment_range(
         &self,
-        tree_index_getter: &dyn Fn(usize) -> Result<usize>,
-        leaf_index_getter: &dyn Fn(usize) -> Result<usize>,
         i: usize,
-    ) -> Result<(usize, SegmentRange)> {
-        match tree_index_getter(i) {
-            Ok(tree_index) => match leaf_index_getter(i) {
-                Ok(leaf_index) => {
-                    Ok((tree_index, SegmentRange{
-                        segment_width: 0,
-                        range: Range {
-                            index: leaf_index,
-                            start: leaf_index,
-                            end: leaf_index + 1,
-                            buf_start: 0,
-                            buf_end: 0,
-                        },
-                    }))
-                },
-                Err(_) => Err(anyhow!("not my leaf"))
+    ) -> SegmentRange {
+        SegmentRange{
+            segment_width: 0,
+            range: Range {
+                index: i,
+                start: i,
+                end: i + 1,
+                buf_start: 0,
+                buf_end: 0,
             },
-            Err(_) => Err(anyhow!("not my leaf"))
         }
     }
 
     fn get_tree_ranges(
         &self,
-        tree_index_getter: &dyn Fn(usize) -> Result<usize>,
-        leaf_index_getter: &dyn Fn(usize) -> Result<usize>,
         i: usize,
         branches: usize,
         rows_to_discard: usize,
@@ -1406,18 +1386,12 @@ impl<
         );
         let segment_width = self.leafs / cached_leafs;
 
-        match self.leaf_index_to_segment_range(tree_index_getter, leaf_index_getter, i) {
-            Ok((tree_index, range)) => {
-                let mut range = range.clone();
-                range.segment_width = segment_width;
-                ranges.push(TreeRanges {
-                    tree_index: tree_index,
-                    path: path.clone(),
-                    ranges: vec![range],
-                });
-            },
-            Err(_) => {},
-        }
+        let mut range = self.leaf_index_to_segment_range(i);
+        range.segment_width = segment_width;
+        ranges.push(TreeRanges {
+            path: path.clone(),
+            ranges: vec![range],
+        });
 
         let mut j = i;
 
@@ -1427,29 +1401,23 @@ impl<
                 if k != j {
                     let read_index = base + k;
                     if read_index < data_width || read_index >= cache_index_start {
-                        match self.leaf_index_to_segment_range(tree_index_getter, leaf_index_getter, base + k) {
-                            Ok((tree_index, segment_range)) => {
-                                let mut segment_range = segment_range.clone();
-                                segment_range.segment_width = segment_width;
+                        let mut segment_range = self.leaf_index_to_segment_range(base + k);
+                        segment_range.segment_width = segment_width;
 
-                                let mut inserted = false;
-                                for range in ranges.iter_mut() {
-                                    if range.tree_index == tree_index {
-                                        range.ranges.push(segment_range.clone());
-                                        inserted = true;
-                                        break;
-                                    }
-                                }
+                        let mut inserted = false;
+                        for range in ranges.iter_mut() {
+                            if range.path == path {
+                                range.ranges.push(segment_range.clone());
+                                inserted = true;
+                                break;
+                            }
+                        }
 
-                                if !inserted {
-                                    ranges.push(TreeRanges {
-                                        tree_index: tree_index,
-                                        path: path.clone(),
-                                        ranges: vec![segment_range],
-                                    });
-                                }
-                            },
-                            Err(_) => {},
+                        if !inserted {
+                            ranges.push(TreeRanges {
+                                path: path.clone(),
+                                ranges: vec![segment_range],
+                            });
                         }
                     }
                 }
@@ -1464,86 +1432,13 @@ impl<
         Ok(ranges)
     }
 
-    fn get_top_tree_ranges(
-        &self,
-        i: usize,
-        branches: usize,
-        rows_to_discard: usize,
-        path: String,
-    ) -> Result<Vec<TreeRanges>> {
-        let tree_index_getter = |j| -> Result<usize> {
-            self.get_top_tree_index(j)
-        };
-        let leaf_index_getter = |j| -> Result<usize> {
-            self.get_top_tree_leaf_index(j)
-        };
-
-        self.get_tree_ranges(
-            &tree_index_getter,
-            &leaf_index_getter,
-            i,
-            branches,
-            rows_to_discard,
-            path,
-        )
-    }
-
-    fn get_sub_tree_ranges(
-        &self,
-        i: usize,
-        branches: usize,
-        rows_to_discard: usize,
-        path: String,
-    ) -> Result<Vec<TreeRanges>> {
-        let tree_index_getter = |j| -> Result<usize> {
-            self.get_sub_tree_index(j)
-        };
-        let leaf_index_getter = |j| -> Result<usize> {
-            self.get_sub_tree_leaf_index(j)
-        };
-
-        self.get_tree_ranges(
-            &tree_index_getter,
-            &leaf_index_getter,
-            i,
-            branches,
-            rows_to_discard,
-            path,
-        )
-    }
-
-    fn get_base_tree_ranges(
-        &self,
-        i: usize,
-        branches: usize,
-        rows_to_discard: usize,
-        path: String,
-    ) -> Result<Vec<TreeRanges>> {
-        let tree_index_getter = |j| -> Result<usize> {
-            self.get_base_tree_index(j)
-        };
-        let leaf_index_getter = |j| -> Result<usize> {
-            self.get_base_tree_leaf_index(j)
-        };
-
-        self.get_tree_ranges(
-            &tree_index_getter,
-            &leaf_index_getter,
-            i,
-            branches,
-            rows_to_discard,
-            path,
-        )
-    }
-
     fn merge_tree_ranges(&self, tree_ranges: Vec<TreeRanges>) -> Vec<TreeRanges> {
         let mut dedup_tree_ranges = Vec::<TreeRanges>::new();
 
         for tree_range in tree_ranges {
             let mut tree_found = false;
             for dedup_tree_range in dedup_tree_ranges.iter_mut() {
-                if dedup_tree_range.tree_index == tree_range.tree_index &&
-                    dedup_tree_range.path == tree_range.path {
+                if dedup_tree_range.path == tree_range.path {
                     tree_found = true;
                     let mut range_found = false;
                     for range in tree_range.ranges.iter() {
@@ -1583,7 +1478,6 @@ impl<
             }
 
             ranges.push(TreeRanges {
-                tree_index: tree_range.tree_index,
                 path: tree_range.path.clone(),
                 ranges: leaf_ranges,
             });
@@ -1595,7 +1489,7 @@ impl<
     fn read_tree_ranges(
         &self,
         tree_ranges: Vec<TreeRanges>,
-        stores: Option<Vec<(String, &S)>>,
+        stores: Vec<(String, &S)>,
     ) -> Vec<Vec<u8>> {
         let mut bufs = Vec::new();
 
@@ -1607,67 +1501,47 @@ impl<
             }
 
             let mut buf = vec![0u8; total_buf_size];
+            let mut results = Vec::<Result<usize>>::new();
 
-            let results = match stores {
-                Some(ref stos) => {
-                    let store: &S;
-                    let mut results = Vec::new();
+            for (path, sto) in stores.clone() {
+                if path == tree_range.path.clone() {
+                    let mut ranges = Vec::new();
 
-                    for (path, sto) in stos.clone() {
-                        if path == tree_range.path.clone() {
-                            store = sto;
-                            let mut ranges = Vec::new();
-
-                            info!("read ranges from {}", path);
-                            for range in tree_range.ranges.clone() {
-                                info!("  start: {} | {}, end {} | {} from {}",
-                                      range.range.start,
-                                      range.range.buf_start,
-                                      range.range.end,
-                                      range.range.buf_end,
-                                      path,
-                                );
-                                ranges.push(range.range.clone());
-                            }
-
-                            results = match store.read_ranges_into(ranges, &mut buf) {
-                                Ok(results) => results,
-                                Err(_) => Vec::new(),
-                            };
-                            break;
-                        }
+                    info!("read ranges from {}", path);
+                    for range in tree_range.ranges.clone() {
+                        info!("  start: {} | {}, end {} | {} from {}",
+                              range.range.start,
+                              range.range.buf_start,
+                              range.range.end,
+                              range.range.buf_end,
+                              path,
+                              );
+                        ranges.push(range.range.clone());
                     }
 
-                    if results.len() == 0 {
-                        Err(anyhow!("fail to read tree range"))
-                    } else {
-                        Ok(results)
-                    }
-                },
-                None => {
-                    self.read_ranges_into(tree_range, &mut buf)
+                    results = match sto.read_ranges_into(ranges, &mut buf) {
+                        Ok(results) => results,
+                        Err(_) => Vec::new(),
+                    };
+                    break;
                 }
-            };
+            }
+
+            if results.len() == 0 {
+                bufs.push(Vec::new());
+                continue;
+            }
 
             let mut error_happen = false;
-
-            match results {
-                Ok(results) => {
-                    for result in results {
-                        match result {
-                            Ok(_) => (),
-                            Err(_) => {
-                                error_happen = true;
-                                error!("fail to read range");
-                            },
-                        }
-                    };
-                },
-                Err(e) => {
-                    error_happen = true;
-                    error!("fail to read ranges: {}", e);
+            for result in results {
+                match result {
+                    Ok(_) => (),
+                    Err(_) => {
+                        error_happen = true;
+                        error!("fail to read range");
+                    },
                 }
-            };
+            }
 
             if !error_happen {
                 bufs.push(buf);
@@ -1684,9 +1558,9 @@ impl<
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
     ) -> Result<Vec<LeafNodeData>> {
-        let (leafs_data, stores, _) = self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, false, None, 0)?;
-        let tree_leafs_data = self.read_tree_leafs_data(leafs_data, Some(stores))?;
-        match self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, true, Some(&tree_leafs_data), 0) {
+        let (leafs_data, stores, _) = self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, false, None)?;
+        let tree_leafs_data = self.read_tree_leafs_data(leafs_data, stores)?;
+        match self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, true, Some(&tree_leafs_data)) {
             Ok((leafs_data, _, _)) => Ok(leafs_data),
             Err(_) => Err(anyhow!("fail to read leafs data with fill buf")),
         }
@@ -1695,7 +1569,7 @@ impl<
     fn read_tree_leafs_data(
         &self,
         leafs_data: Vec<LeafNodeData>,
-        stores: Option<Vec<(String, &S)>>,
+        stores: Vec<(String, &S)>,
     ) -> Result<TreeLeafData> {
         let mut tree_ranges = Vec::<TreeRanges>::new();
 
@@ -1707,7 +1581,7 @@ impl<
             };
 
             for (i, range) in tree_ranges.clone().iter().enumerate() {
-                if range.tree_index == data.tree_index {
+                if range.path == data.path {
                     tree_exists = true;
                     tree_ranges[i].ranges.push(segment_range);
                     break;
@@ -1715,7 +1589,6 @@ impl<
             }
             if !tree_exists {
                 tree_ranges.push(TreeRanges {
-                    tree_index: data.tree_index,
                     path: data.path.clone(),
                     ranges: vec![segment_range],
                 });
@@ -1724,6 +1597,7 @@ impl<
         }
 
         tree_ranges = self.merge_tree_ranges(tree_ranges);
+        tree_ranges = self.caculate_tree_offset(tree_ranges);
         let tree_bufs = self.read_tree_ranges(tree_ranges.clone(), stores.clone());
 
         Ok(TreeLeafData {
@@ -1738,7 +1612,6 @@ impl<
         rows_to_discard: Option<usize>,
         fill_buf: bool,
         tree_leafs_data: Option<&TreeLeafData>,
-        tree_index: usize,
     ) -> Result<(Vec<LeafNodeData>,
                  Vec<(String, &S)>,
                  Vec<TreeRanges>)> {
@@ -1765,9 +1638,6 @@ impl<
                 }
 
                 let mut infos = Vec::new();
-                let mut top_tree_ranges = Vec::new();
-                let mut sub_tree_ranges = Vec::new();
-                let mut base_tree_ranges = Vec::new();
 
                 ensure!(self.data.store().is_some(), "store data required");
                 let store = self.data.store().unwrap();
@@ -1855,34 +1725,16 @@ impl<
                         partial_row_count: partial_row_count,
                     });
 
-                    match self.get_top_tree_ranges(i, branches, rows_to_discard, path.clone()) {
-                        Ok(ranges) => top_tree_ranges.extend(ranges),
-                        Err(_) => {}
-                    }
-                    match self.get_sub_tree_ranges(i, branches, rows_to_discard, path.clone()) {
-                        Ok(ranges) => sub_tree_ranges.extend(ranges),
-                        Err(_) => {}
-                    }
-                    match self.get_base_tree_ranges(i, branches, rows_to_discard, path.clone()) {
-                        Ok(ranges) => base_tree_ranges.extend(ranges),
+                    match self.get_tree_ranges(i, branches, rows_to_discard, path.clone()) {
+                        Ok(ranges) => tree_ranges.extend(ranges),
                         Err(_) => {}
                     }
                 }
 
-                top_tree_ranges = self.merge_tree_ranges(top_tree_ranges);
-                sub_tree_ranges = self.merge_tree_ranges(sub_tree_ranges);
-                base_tree_ranges = self.merge_tree_ranges(base_tree_ranges);
-
-                top_tree_ranges = self.caculate_tree_offset(top_tree_ranges);
-                sub_tree_ranges = self.caculate_tree_offset(sub_tree_ranges);
-                base_tree_ranges = self.caculate_tree_offset(base_tree_ranges);
-
-                tree_ranges.extend(top_tree_ranges);
-                tree_ranges.extend(sub_tree_ranges);
-                tree_ranges.extend(base_tree_ranges);
                 tree_ranges = self.merge_tree_ranges(tree_ranges);
 
-                let tree_bufs = self.read_tree_ranges(tree_ranges.clone(), None);
+                tree_ranges = self.caculate_tree_offset(tree_ranges);
+                let tree_bufs = self.read_tree_ranges(tree_ranges.clone(), vec![(path.clone(), store)]);
 
                 let mut data_copy = vec![0; total_buf_size];
                 let results = store.read_ranges_into(
@@ -1895,32 +1747,37 @@ impl<
                     nodes.push(
                         LeafNodeData {
                             path: path.clone(),
-                            /*
                             data: match results[i] {
                                 Ok(_) => Ok((&data_copy[range.buf_start..range.buf_end]).to_vec()),
                                 Err(_) => Err(anyhow!("fail to read challenge {}", range.index)),
                             },
-                            */
-                            // TODO: find by path directly
+                            /*
                             data: if fill_buf {
                                 self.read_buf_from_tree_ranges_bufs(
-                                    tree_index,
+                                    path.clone(),
                                     range.index,
                                     tree_leafs_data.unwrap().tree_ranges.clone(),
                                     tree_leafs_data.unwrap().tree_bufs.clone())
                             } else {
                                 Ok(Vec::new())
                             },
+                            */
                             challenge: range.index,
                             range: range.clone(),
                             branches: infos[i].branches,
                             partial_row_count: infos[i].partial_row_count,
                             segment_width: infos[i].segment_width,
                             rows_to_discard: Some(infos[i].rows_to_discard),
-                            tree_index: tree_index,
-                            tree_leafs_data: TreeLeafData {
-                                tree_ranges: tree_ranges.clone(),
-                                tree_bufs: tree_bufs.clone(),
+                            tree_leafs_data: if false && fill_buf {
+                                TreeLeafData {
+                                    tree_ranges: tree_leafs_data.unwrap().tree_ranges.clone(),
+                                    tree_bufs: tree_leafs_data.unwrap().tree_bufs.clone(),
+                                }
+                            } else {
+                                TreeLeafData {
+                                    tree_ranges: tree_ranges.clone(),
+                                    tree_bufs: tree_bufs.clone(),
+                                }
                             },
                         }
                     )
@@ -1937,8 +1794,6 @@ impl<
         i: usize,
         leaf_data: LeafNodeData,
     ) -> Result<Proof<E, BaseTreeArity>> {
-        // let tree_index = leaf_data.tree_index;
-
         let tree_index = i / (self.leafs / Arity::to_usize());
         let trees = &self.data.sub_trees().unwrap();
         let tree = &trees[tree_index];
@@ -1974,8 +1829,6 @@ impl<
         i: usize,
         leaf_data: LeafNodeData,
     ) -> Result<Proof<E, BaseTreeArity>> {
-        // let tree_index = leaf_data.tree_index;
-
         let tree_index = i / (self.leafs / Arity::to_usize());
         let trees = &self.data.base_trees().unwrap();
         let tree = &trees[tree_index];
@@ -2061,82 +1914,53 @@ impl<
 
     fn read_buf_from_tree_ranges_bufs(
         &self,
-        tree_index: usize,
+        path: String,
         leaf_index: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<Vec<u8>> {
         for (i, tree_range) in tree_ranges.iter().enumerate() {
-            if tree_range.tree_index != tree_index {
+            if tree_range.path != path {
                 continue
             }
 
             for range in tree_range.ranges.clone() {
                 if range.range.index == leaf_index {
                     if tree_bufs[i].len() == 0 {
-                        return Err(anyhow!("fail to read tree buf {} - leaf {}", tree_index, leaf_index));
+                        return Err(anyhow!("fail to read tree buf {} - leaf {}", i, leaf_index));
                     } else {
                         return Ok(tree_bufs[i][range.range.buf_start..range.range.buf_end].to_vec());
                     }
                 }
             }
         }
-        Err(anyhow!("fail to find tree {} - leaf {}", tree_index, leaf_index))
+        Err(anyhow!("fail to find tree {} - leaf {}", path, leaf_index))
     }
 
-    /*
     fn read_from_tree_ranges_bufs(
         &self,
-        tree_index: usize,
+        path: String,
         leaf_index: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<E> {
-        match self.read_buf_from_tree_ranges_bufs(tree_index, leaf_index, tree_ranges, tree_bufs) {
+        match self.read_buf_from_tree_ranges_bufs(path.clone(), leaf_index, tree_ranges, tree_bufs) {
             Ok(buf) => Ok(E::from_slice(&buf)),
-            Err(_) => Err(anyhow!("fail to read tree buf {} - leaf {}", tree_index, leaf_index)),
+            Err(_) => Err(anyhow!("fail to read tree buf {} - leaf {}", path, leaf_index)),
         }
     }
 
-    fn read_from_leaf_data_top_tree(
+    fn read_from_leaf_data_tree_bufs(
         &self,
-        tree_index: usize,
+        path: String,
         leaf_index: usize,
         leaf_data: LeafNodeData,
     ) -> Result<E> {
         self.read_from_tree_ranges_bufs(
-            tree_index,
+            path,
             leaf_index,
-            leaf_data.top_tree_ranges,
-            leaf_data.top_tree_bufs,
-        )
-    }
-
-    fn read_from_leaf_data_sub_tree(
-        &self,
-        tree_index: usize,
-        leaf_index: usize,
-        leaf_data: LeafNodeData,
-    ) -> Result<E> {
-        self.read_from_tree_ranges_bufs(
-            tree_index,
-            leaf_index,
-            leaf_data.sub_tree_ranges,
-            leaf_data.sub_tree_bufs,
-        )
-    }
-
-    fn read_from_leaf_data_base_tree(
-        &self,
-        tree_index: usize,
-        leaf_index: usize,
-        leaf_data: LeafNodeData,
-    ) -> Result<E> {
-        self.read_from_tree_ranges_bufs(
-            tree_index,
-            leaf_index,
-            leaf_data.base_tree_ranges,
-            leaf_data.base_tree_bufs,
+            leaf_data.tree_leafs_data.tree_ranges,
+            leaf_data.tree_leafs_data.tree_bufs,
         )
     }
 
@@ -2157,7 +1981,7 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
-                tree.read_from_leaf_data_top_tree(tree_index, leaf_index, leaf_data)
+                tree.read_from_leaf_data(leaf_index, leaf_data)
             }
             Data::SubTree(base_trees) => {
                 // Locate the sub-tree layer tree the base leaf is contained in.
@@ -2172,15 +1996,18 @@ impl<
                 // Get the leaf index within the sub-tree.
                 let leaf_index = i % tree_leafs;
 
-                tree.read_from_leaf_data_sub_tree(tree_index, leaf_index, leaf_data)
+                tree.read_from_leaf_data(leaf_index, leaf_data)
             }
-            Data::BaseTree(_data) => {
+            Data::BaseTree(data) => {
                 // Read from the base layer tree data.
-                self.read_from_leaf_data_base_tree(0, i, leaf_data)
+                let path = match data.path() {
+                    Some(path) => path.as_path().display().to_string(),
+                    None => "/tmp-xxxxxxx".to_string(),
+                };
+                self.read_from_leaf_data_tree_bufs(path, i, leaf_data)
             }
         }
     }
-    */
 
     /// Generate merkle tree inclusion proof for leaf `i` given a
     /// partial tree for lookups where data is otherwise unavailable.
@@ -2264,8 +2091,8 @@ impl<
             "Data slice must not have a top layer"
         );
 
-        lemma.push(self.read_at(j)?);
-        // lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
+        // lemma.push(self.read_at(j)?);
+        lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
         while base + 1 < self.len() {
             let hash_index = (j / branches) * branches;
             for k in hash_index..hash_index + branches {
@@ -2273,8 +2100,8 @@ impl<
                     let read_index = base + k;
                     lemma.push(
                         if read_index < data_width || read_index >= cache_index_start {
-                            self.read_at(base + k)?
-                            // self.read_from_leaf_data(base + k, leaf_data.clone())?
+                            // self.read_at(base + k)?
+                            self.read_from_leaf_data(base + k, leaf_data.clone())?
                         } else {
                             let read_index = partial_base + k - segment_shift;
                             partial_tree.read_at(read_index)?
@@ -2640,45 +2467,6 @@ impl<
             Data::TopTree(_) => None,
             Data::SubTree(_) => None,
             Data::BaseTree(store) => Some(store),
-        }
-    }
-
-    /// Returns merkle leaf at index i
-    #[inline]
-    pub fn read_ranges_into(&self, tree_range: TreeRanges, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
-        match &self.data {
-            Data::TopTree(sub_trees) => {
-                // Locate the top-layer tree the sub-tree leaf is contained in.
-                if TopTreeArity::to_usize() != sub_trees.len() {
-                    ()
-                }
-
-                let tree_index = tree_range.tree_index;
-                let tree = &sub_trees[tree_index];
-
-                tree.read_ranges_into(tree_range, buf)
-            }
-            Data::SubTree(base_trees) => {
-                // Locate the sub-tree layer tree the base leaf is contained in.
-                if SubTreeArity::to_usize() != base_trees.len() {
-                    ()
-                }
-
-                let tree_index = tree_range.tree_index;
-                let tree = &base_trees[tree_index];
-
-                tree.read_ranges_into(tree_range, buf)
-            }
-            Data::BaseTree(data) => {
-                // Read from the base layer tree data.
-                let mut ranges = Vec::new();
-
-                for range in tree_range.ranges.clone() {
-                    ranges.push(range.range.clone());
-                }
-
-                data.read_ranges_into(ranges, buf)
-            }
         }
     }
 
