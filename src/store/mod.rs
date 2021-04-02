@@ -155,7 +155,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
 
             for range in ranges.clone() {
                 if range.start == data.range.start &&
-                    buf_end - buf_start <= data.data.len() {
+                    range.buf_end - range.buf_start <= data.data.len() {
                     buf_start = range.buf_start;
                     buf_end = range.buf_end;
                     found = true;

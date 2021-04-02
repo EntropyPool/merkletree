@@ -23,7 +23,7 @@ use crate::merkle::{
 };
 use crate::store::{
     ExternalReader, Store, StoreConfig, BUILD_CHUNK_NODES,
-    read_from_oss, StoreOssConfig, Range,
+    read_from_oss, StoreOssConfig, Range, read_ranges_from_oss,
 };
 
 use s3::bucket::Bucket;
@@ -950,12 +950,41 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             if start < self.data_width * self.elem_len && self.reader.is_some() {
                 reader_ranges.push(range);
             } else {
-                direct_ranges.push(range);
-                match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
-                    Err(_) => direct_sizes.push(Err(anyhow!("fail to read file"))),
-                    Ok(_) => direct_sizes.push(Ok(read_len)),
+                if !self.oss {
+                    match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
+                        Err(_) => direct_sizes.push(Err(anyhow!("fail to read file"))),
+                        Ok(_) => direct_sizes.push(Ok(read_len)),
+                    }
+                } else {
+                    let adjusted_start = if start >= self.cache_index_start {
+                        if self.reader.is_none() {
+                            // if v1
+                            start - self.cache_index_start + (self.data_width * self.elem_len)
+                        } else {
+                            start - self.cache_index_start
+                        }
+                    } else {
+                        start
+                    };
+
+                    range.start = adjusted_start;
+                    range.end = adjusted_start + read_len;
+                    direct_ranges.push(range);
                 }
             }
+        }
+
+        if self.oss {
+            direct_sizes = read_ranges_from_oss(
+                direct_ranges.clone(),
+                buf,
+                self.path.clone(),
+                &self.oss_config,
+            ).with_context(|| {
+                format!("failed to read ranges from oss file {}",
+                        self.path,
+                    )
+            })?;
         }
 
         let reader_sizes = self.reader
