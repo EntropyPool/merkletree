@@ -209,15 +209,17 @@ impl ExternalReader<std::fs::File> {
                     read_ranges_from_oss(ranges, buf, path, oss_config)
                 } else {
                     let mut sizes = Vec::new();
+                    info!("multi read from local {} start", path);
                     for range in ranges {
                         info!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
                                range.start, range.buf_start, range.end, range.buf_end,
-                               path, buf.len(),range.index);
+                               path, buf.len(), range.index);
                         let reader = OpenOptions::new().read(true).open(&path)?;
                         let read_len = range.end - range.start;
                         reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_end])?;
                         sizes.push(Ok(read_len));
                     }
+                    info!("multi read from local {} done", path);
                     Ok(sizes)
                 }
             },
