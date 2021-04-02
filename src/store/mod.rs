@@ -129,11 +129,11 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
         let mut http_ranges = Vec::<ops::Range<usize>>::new();
 
         for range in ranges.clone() {
-            info!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
+            debug!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
             http_ranges.push(ops::Range{ start: range.start, end: range.end });
         }
 
-        info!("multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
+        debug!("multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
                oss_config.url, oss_config.bucket_name,
                oss_config.multi_ranges, http_ranges);
 
@@ -173,7 +173,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                 return Err(anyhow!("fail to find ranges buf {:?} from {}", obj_name, oss_config.url));
             }
 
-            info!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
+            debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
             buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
             sizes[i] = Ok(buf_end - buf_start);
         }

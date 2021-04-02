@@ -1517,9 +1517,9 @@ impl<
                 if path == tree_range.path.clone() {
                     let mut ranges = Vec::new();
 
-                    info!("read ranges from {} | {:?}", path, sto);
+                    debug!("read ranges from {} | {:?}", path, sto);
                     for range in tree_range.ranges.clone() {
-                        info!("  start: {} | {} | {}, end {} | {} from {}",
+                        debug!("  start: {} | {} | {}, end {} | {} from {}",
                             range.range.index,
                             range.range.start,
                             range.range.buf_start,
@@ -1722,7 +1722,7 @@ impl<
                     let segment_start = (i / segment_width) * segment_width;
                     let segment_end = segment_start + segment_width;
 
-                    info!("batch leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
+                    debug!("batch leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
                             partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
                            self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                            cached_leafs, segment_width, segment_start, segment_end, i);
@@ -2230,7 +2230,7 @@ impl<
                     &mut data_copy,
                 )?;
 
-                info!("orig leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
+                debug!("orig leafs {}, branches {}, total size {}, total row_count {}, cache_size {}, rows_to_discard {}, \
                         partial_row_count {}, cached_leafs {}, segment_width {}, segment range {}-{} for {}",
                        self.leafs, branches, total_size, self.row_count, cache_size, rows_to_discard, partial_row_count,
                        cached_leafs, segment_width, segment_start, segment_end, i);
