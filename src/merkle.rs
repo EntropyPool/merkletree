@@ -1519,7 +1519,8 @@ impl<
 
                     info!("read ranges from {} | {:?}", path, sto);
                     for range in tree_range.ranges.clone() {
-                        info!("  start: {} | {}, end {} | {} from {}",
+                        info!("  start: {} | {} | {}, end {} | {} from {}",
+                            range.range.index,
                             range.range.start,
                             range.range.buf_start,
                             range.range.end,
@@ -1760,7 +1761,7 @@ impl<
                             data: if fill_buf {
                                 self.read_buf_from_tree_ranges_bufs(
                                     path.clone(),
-                                    range.index,
+                                    range.start,
                                     tree_leafs_data.unwrap().tree_ranges.clone(),
                                     tree_leafs_data.unwrap().tree_bufs.clone())
                             } else {
@@ -1929,7 +1930,7 @@ impl<
             }
 
             for range in tree_range.ranges.clone() {
-                if range.range.index == leaf_index {
+                if range.range.start == leaf_index {
                     if tree_bufs[i].len() == 0 {
                         return Err(anyhow!("fail to read tree buf {} - leaf {}", i, leaf_index));
                     } else {
