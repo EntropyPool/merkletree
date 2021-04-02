@@ -1949,7 +1949,7 @@ impl<
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<E> {
         match self.read_buf_from_tree_ranges_bufs(path.clone(), leaf_index, tree_ranges, tree_bufs) {
-            Ok(buf) => Ok(E::from_slice(&buf)),
+            Ok(buf) => Ok(E::from_slice(&buf[0..E::byte_len()])),
             Err(_) => Err(anyhow!("fail to read tree buf {} - leaf {}", path, leaf_index)),
         }
     }
