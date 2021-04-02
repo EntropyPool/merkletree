@@ -6,6 +6,7 @@ use std::marker::PhantomData;
 use std::ops;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use memmap::MmapOptions;
@@ -66,7 +67,9 @@ pub struct LevelCacheStore<E: Element, R: Read + Send + Sync> {
 
     oss: bool,
     oss_config: StoreOssConfig,
+
     path: String,
+    data_path: PathBuf,
 
     _e: PhantomData<E>,
 }
@@ -96,7 +99,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
         let path = data_path.as_path().display().to_string();
 
-        let file = File::open(data_path)?;
+        let file = File::open(data_path.clone())?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
@@ -144,6 +147,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             oss: false,
             oss_config: Default::default(),
             path,
+            data_path: data_path,
             _e: Default::default(),
         })
     }
@@ -179,7 +183,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(data_path.clone())?;
 
         file.set_len(store_size as u64)?;
         let leafs = get_merkle_tree_leafs(size, branches)?;
@@ -207,6 +211,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             oss: false,
             oss_config: Default::default(),
             path,
+            data_path: data_path,
             _e: Default::default(),
         })
     }
@@ -228,6 +233,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             oss: false,
             oss_config: Default::default(),
             path: "tmp".to_string(),
+            data_path: PathBuf::from("/tmp"),
             _e: Default::default(),
         })
     }
@@ -319,6 +325,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             oss: true,
             oss_config: config.oss_config.clone(),
             path,
+            data_path: data_path,
             _e: Default::default(),
         })
     }
@@ -331,7 +338,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let file = OpenOptions::new()
             .write(true)
             .read(true)
-            .open(data_path)?;
+            .open(data_path.clone())?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
@@ -381,6 +388,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             oss: false,
             oss_config: Default::default(),
             path,
+            data_path: data_path,
             _e: Default::default(),
         })
     }
@@ -493,6 +501,10 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             .chunks(self.elem_len)
             .map(E::from_slice)
             .collect())
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        Some(&self.data_path)
     }
 
     fn len(&self) -> usize {

@@ -246,6 +246,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
             .collect())
     }
 
+    fn path(&self) -> Option<&PathBuf> {
+        Some(&self.path)
+    }
+
     fn len(&self) -> usize {
         self.len
     }

@@ -3,7 +3,7 @@ use std::io::{copy, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
@@ -42,6 +42,7 @@ pub struct DiskStore<E: Element> {
     store_size: usize,
 
     path: String,
+    data_path: PathBuf,
 }
 
 impl<E: Element> Store<E> for DiskStore<E> {
@@ -60,7 +61,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(data_path.clone())?;
 
         let store_size = E::byte_len() * size;
         file.set_len(store_size as u64)?;
@@ -73,6 +74,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             loaded_from_disk: false,
             store_size,
             path,
+            data_path: data_path,
         })
     }
 
@@ -89,6 +91,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             loaded_from_disk: false,
             store_size,
             path: "tmp".to_string(),
+            data_path: PathBuf::from("/tmp"),
         })
     }
 
@@ -143,7 +146,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
         let file = OpenOptions::new()
             .write(true)
             .read(true)
-            .open(data_path)?;
+            .open(data_path.clone())?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
@@ -163,6 +166,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             loaded_from_disk: true,
             store_size,
             path,
+            data_path: data_path,
         })
     }
 
@@ -234,6 +238,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .chunks(self.elem_len)
             .map(E::from_slice)
             .collect())
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        Some(&self.data_path)
     }
 
     fn len(&self) -> usize {

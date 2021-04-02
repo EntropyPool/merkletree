@@ -4,6 +4,7 @@ use anyhow::Result;
 
 use crate::merkle::Element;
 use crate::store::{Store, StoreConfig, Range};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Default)]
 pub struct VecStore<E: Element>(Vec<E>);
@@ -105,6 +106,10 @@ impl<E: Element> Store<E> for VecStore<E> {
 
     fn read_range(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
         Ok(self.0.index(r).to_vec())
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        None
     }
 
     fn len(&self) -> usize {
