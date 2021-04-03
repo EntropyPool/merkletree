@@ -31,7 +31,7 @@ use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
 
-use log::info;
+use log::{info, debug};
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -282,7 +282,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
         let path = data_path.as_path().display().to_string();
 
-        info!("create store from oss for {:?}", data_path);
+        debug!("create store from oss for {:?}", data_path);
 
         let obj_name = data_path.strip_prefix(config.oss_config.landed_dir.clone()).unwrap();
         let credentials = Credentials::new(
