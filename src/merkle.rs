@@ -1501,9 +1501,9 @@ impl<
         tree_ranges: Vec<TreeRanges>,
         stores: Vec<(String, &S)>,
     ) -> Vec<Vec<u8>> {
-        let mut bufs = Vec::new();
+        tree_ranges.par_iter().map(|tree_range| {
+            debug!("start read tree ranges from {}", tree_range.path);
 
-        for tree_range in tree_ranges {
             let mut total_buf_size = 0;
 
             for range in tree_range.ranges.clone() {
@@ -1539,8 +1539,7 @@ impl<
             }
 
             if results.len() == 0 {
-                bufs.push(Vec::new());
-                continue;
+                return Vec::new();
             }
 
             let mut error_happen = false;
@@ -1554,14 +1553,14 @@ impl<
                 }
             }
 
-            if !error_happen {
-                bufs.push(buf);
-            } else {
-                bufs.push(Vec::new());
-            }
-        }
+            debug!("done read tree ranges from {}", tree_range.path);
 
-        bufs
+            if !error_happen {
+                buf
+            } else {
+                Vec::new()
+            }
+        }).collect()
     }
 
     pub fn read_leafs(
@@ -1569,12 +1568,16 @@ impl<
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
     ) -> Result<Vec<LeafNodeData>> {
+        info!("read leafs: prepare leafs data buffer for {:?}", challenges);
         let (leafs_data, stores, _tree_ranges) = self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, false, None)?;
+        info!("read leafs: read leafs data for {:?} from {:?}", challenges, stores);
         let tree_leafs_data = self.read_tree_leafs_data(leafs_data, stores)?;
+        info!("read leafs: generate lemma from leafs data for {:?}", challenges);
         let result = match self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, true, Some(&tree_leafs_data)) {
             Ok((leafs_data, _, _)) => Ok(leafs_data),
             Err(_) => Err(anyhow!("fail to read leafs data with fill buf")),
         };
+        info!("read leafs: done leafs data for {:?}", challenges);
         result
     }
 
