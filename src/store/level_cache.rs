@@ -458,8 +458,6 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
     }
 
     fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
-        // let mut results = Vec::new();
-
         for range in &ranges {
             let start = range.start * self.elem_len;
             let end = range.end * self.elem_len;
@@ -471,17 +469,9 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
                 start <= self.data_width * self.elem_len || start >= self.cache_index_start,
                 "out of bounds"
             );
-
-            /*
-            match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
-                Ok(_) => results.push(Ok(range.end - range.start)),
-                Err(_) => results.push(Err(anyhow!("fail to read range"))),
-            };
-            */
         }
 
         self.store_read_ranges_into(ranges, buf)
-        // Ok(results)
     }
 
     fn read_range(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
@@ -501,6 +491,17 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             .chunks(self.elem_len)
             .map(E::from_slice)
             .collect())
+    }
+
+    fn path_by_range(&self, range: Range) -> Option<&PathBuf> {
+        let start = range.start * self.elem_len;
+
+        // If an external reader was specified for the base layer, use it.
+        if start < self.data_width * self.elem_len && self.reader.is_some() {
+            return Some(&self.reader.as_ref().unwrap().data_path);
+        }
+
+        Some(&self.data_path)
     }
 
     fn path(&self) -> Option<&PathBuf> {

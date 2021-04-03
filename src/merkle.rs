@@ -207,15 +207,30 @@ pub struct SegmentRange {
 
 #[derive(Debug)]
 pub struct TreeRanges {
-    pub path: String,
+    pub store_path: String,
+    pub file_path: String,
     pub ranges: Vec<SegmentRange>,
 }
 
 impl Clone for TreeRanges {
     fn clone(&self) ->TreeRanges {
         TreeRanges {
-            path: self.path.clone(),
+            store_path: self.store_path.clone(),
+            file_path: self.file_path.clone(),
             ranges: self.ranges.clone(),
+        }
+    }
+}
+
+impl TreeRanges {
+    pub fn dump(&self) {
+        info!("TREE {} | {}", self.store_path, self.file_path);
+        for range in self.ranges.clone() {
+            debug!("  segment width: {} | {} | {}-{}",
+                  range.segment_width,
+                  range.range.index,
+                  range.range.start,
+                  range.range.end);
         }
     }
 }
@@ -228,7 +243,8 @@ struct TreeLeafData {
 
 #[derive(Debug)]
 pub struct LeafNodeData {
-    path: String,
+    store_path: String,
+    file_path: String,
     pub data: Result<Vec<u8>>,
     pub range: Range,
     pub challenge: usize,
@@ -242,7 +258,8 @@ pub struct LeafNodeData {
 impl Clone for LeafNodeData {
     fn clone(&self) -> LeafNodeData {
         let data = LeafNodeData {
-            path: self.path.clone(),
+            store_path: self.store_path.clone(),
+            file_path: self.file_path.clone(),
             data: match &self.data {
                 Ok(data) => Ok(data.clone()),
                 Err(_) => Err(anyhow!("tree data error")),
@@ -1157,12 +1174,12 @@ impl<
         fill_buf: bool,
         tree_leafs_data: Option<&TreeLeafData>,
     ) -> Result<(Vec<LeafNodeData>,
-                 Vec<(String, &S)>,
+                 Vec<(String, String, &S)>,
                  Vec<TreeRanges>)> {
         ensure!(Arity::to_usize() != 0, "Invalid top-tree arity");
 
         let mut nodes = Vec::new();
-        let mut stores = Vec::<(String, &S)>::new();
+        let mut stores = Vec::<(String, String, &S)>::new();
         let mut tree_ranges = Vec::new();
 
         for i in challenges {
@@ -1183,7 +1200,7 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let (mut node, store, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
+            let (mut node, leaf_stores, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
                 vec![leaf_index],
                 rows_to_discard,
                 fill_buf,
@@ -1196,7 +1213,7 @@ impl<
             node[0].challenge = i;
 
             nodes.push(node[0].clone());
-            stores.push(store[0].clone());
+            stores.extend(leaf_stores);
             tree_ranges.extend(leaf_tree_ranges);
         }
 
@@ -1210,12 +1227,12 @@ impl<
         fill_buf: bool,
         tree_leafs_data: Option<&TreeLeafData>,
     ) -> Result<(Vec<LeafNodeData>,
-                 Vec<(String, &S)>,
+                 Vec<(String, String, &S)>,
                  Vec<TreeRanges>)> {
         ensure!(Arity::to_usize() != 0, "Invalid sub-tree arity");
 
         let mut nodes = Vec::new();
-        let mut stores = Vec::<(String, &S)>::new();
+        let mut stores = Vec::<(String, String, &S)>::new();
         let mut tree_ranges = Vec::new();
 
         for i in challenges {
@@ -1235,7 +1252,7 @@ impl<
 
             // Get the leaf index within the sub-tree.
             let leaf_index = i % tree_leafs;
-            let (mut node, store, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
+            let (mut node, leaf_stores, leaf_tree_ranges) = tree.read_leafs_with_fill_buf(
                 vec![leaf_index],
                 rows_to_discard,
                 fill_buf,
@@ -1248,7 +1265,7 @@ impl<
             node[0].challenge = i;
 
             nodes.push(node[0].clone());
-            stores.push(store[0].clone());
+            stores.extend(leaf_stores);
             tree_ranges.extend(leaf_tree_ranges);
         }
 
@@ -1368,9 +1385,10 @@ impl<
         i: usize,
         branches: usize,
         rows_to_discard: usize,
-        path: String,
-    ) -> Result<Vec<TreeRanges>> {
+    ) -> Result<(Vec<TreeRanges>,
+                Vec<(String, String, &S)>)> {
         let mut ranges = Vec::new();
+        let mut stores = Vec::new();
 
         let mut base = 0;
         let shift = log2_pow2(branches);
@@ -1385,13 +1403,27 @@ impl<
             "Cached leafs size must be a power of 2"
         );
         let segment_width = self.leafs / cached_leafs;
-
         let mut range = self.leaf_index_to_segment_range(i);
+
+        ensure!(self.data.store().is_some(), "store data required");
+        let store = self.data.store().unwrap();
+        let file_path = match store.path_by_range(range.range.clone()) {
+            Some(path) => path.as_path().display().to_string(),
+            None => "/tmp-xxxxxxx".to_string(),
+        };
+        let store_path = match store.path() {
+            Some(path) => path.as_path().display().to_string(),
+            None => "/tmp-xxxxxxx".to_string(),
+        };
+
         range.segment_width = segment_width;
         ranges.push(TreeRanges {
-            path: path.clone(),
-            ranges: vec![range],
+            store_path: store_path.clone(),
+            file_path: file_path.clone(),
+            ranges: vec![range.clone()],
         });
+
+        stores.push((store_path.clone(), file_path.clone(), store.clone()));
 
         let mut j = i;
 
@@ -1404,9 +1436,20 @@ impl<
                         let mut segment_range = self.leaf_index_to_segment_range(base + k);
                         segment_range.segment_width = segment_width;
 
+                        let file_path = match store.path_by_range(segment_range.range.clone()) {
+                            Some(path) => path.as_path().display().to_string(),
+                            None => "/tmp-xxxxxxx".to_string(),
+                        };
+                        let store_path = match store.path() {
+                            Some(path) => path.as_path().display().to_string(),
+                            None => "/tmp-xxxxxxx".to_string(),
+                        };
+
+                        stores.push((store_path.clone(), file_path.clone(), store.clone()));
+
                         let mut inserted = false;
                         for range in ranges.iter_mut() {
-                            if range.path == path {
+                            if range.store_path == store_path && range.file_path == file_path {
                                 range.ranges.push(segment_range.clone());
                                 inserted = true;
                                 break;
@@ -1415,7 +1458,8 @@ impl<
 
                         if !inserted {
                             ranges.push(TreeRanges {
-                                path: path.clone(),
+                                store_path: store_path.clone(),
+                                file_path: file_path.clone(),
                                 ranges: vec![segment_range],
                             });
                         }
@@ -1429,7 +1473,7 @@ impl<
             j >>= shift; // j /= branches;
         }
 
-        Ok(ranges)
+        Ok((ranges, stores))
     }
 
     fn merge_tree_ranges(&self, tree_ranges: Vec<TreeRanges>) -> Vec<TreeRanges> {
@@ -1438,7 +1482,8 @@ impl<
         for tree_range in tree_ranges {
             let mut tree_found = false;
             for dedup_tree_range in dedup_tree_ranges.iter_mut() {
-                if dedup_tree_range.path == tree_range.path {
+                if dedup_tree_range.store_path == tree_range.store_path &&
+                    dedup_tree_range.file_path == tree_range.file_path {
                     tree_found = true;
                     let mut range_found = false;
 
@@ -1488,7 +1533,8 @@ impl<
             }
 
             ranges.push(TreeRanges {
-                path: tree_range.path.clone(),
+                store_path: tree_range.store_path.clone(),
+                file_path: tree_range.file_path.clone(),
                 ranges: leaf_ranges,
             });
         }
@@ -1499,10 +1545,10 @@ impl<
     fn read_tree_ranges(
         &self,
         tree_ranges: Vec<TreeRanges>,
-        stores: Vec<(String, &S)>,
+        stores: Vec<(String, String, &S)>,
     ) -> Vec<Vec<u8>> {
-        tree_ranges.par_iter().map(|tree_range| {
-            debug!("start read tree ranges from {}", tree_range.path);
+        tree_ranges.iter().map(|tree_range| {
+            debug!("start read tree ranges from {} | {}", tree_range.store_path, tree_range.file_path);
 
             let mut total_buf_size = 0;
 
@@ -1513,19 +1559,22 @@ impl<
             let mut buf = vec![0u8; total_buf_size];
             let mut results = Vec::<Result<usize>>::new();
 
-            for (path, sto) in stores.clone() {
-                if path == tree_range.path.clone() {
+            for (store_path, file_path, sto) in stores.clone() {
+                info!("try to read tree ranges from store {} | {}", store_path, file_path);
+                if store_path == tree_range.store_path.clone() &&
+                    file_path == tree_range.file_path.clone() {
                     let mut ranges = Vec::new();
 
-                    debug!("read ranges from {} | {:?}", path, sto);
+                    debug!("read ranges from {} | {} | {:?}", store_path, file_path, sto);
                     for range in tree_range.ranges.clone() {
-                        debug!("  start: {} | {} | {}, end {} | {} from {}",
+                        debug!("  start: {} | {} | {}, end {} | {} from {} | {}",
                             range.range.index,
                             range.range.start,
                             range.range.buf_start,
                             range.range.end,
                             range.range.buf_end,
-                            path,
+                            store_path,
+                            file_path,
                         );
                         ranges.push(range.range.clone());
                     }
@@ -1553,7 +1602,7 @@ impl<
                 }
             }
 
-            debug!("done read tree ranges from {}", tree_range.path);
+            debug!("done read tree ranges from {} | {}", tree_range.store_path, tree_range.file_path);
 
             if !error_happen {
                 buf
@@ -1584,11 +1633,11 @@ impl<
     fn read_tree_leafs_data(
         &self,
         leafs_data: Vec<LeafNodeData>,
-        stores: Vec<(String, &S)>,
+        stores: Vec<(String, String, &S)>,
     ) -> Result<TreeLeafData> {
         let mut tree_ranges = Vec::<TreeRanges>::new();
 
-        let mut f = |path: String, range: Range, segment_width: usize| {
+        let mut f = |store_path: String, file_path: String, range: Range, segment_width: usize| {
             let mut tree_exists = false;
             let segment_range = SegmentRange {
                 segment_width: segment_width,
@@ -1596,7 +1645,8 @@ impl<
             };
 
             for (i, tree_range) in tree_ranges.clone().iter().enumerate() {
-                if tree_range.path == path.clone() {
+                if tree_range.file_path == file_path.clone() &&
+                    tree_range.store_path == store_path.clone() {
                     tree_exists = true;
                     tree_ranges[i].ranges.push(segment_range);
                     break;
@@ -1604,17 +1654,18 @@ impl<
             }
             if !tree_exists {
                 tree_ranges.push(TreeRanges {
-                    path: path.clone(),
+                    store_path: store_path.clone(),
+                    file_path: file_path.clone(),
                     ranges: vec![segment_range],
                 });
             }
         };
 
         for data in leafs_data {
-            f(data.path, data.range, data.segment_width);
+            f(data.store_path, data.file_path, data.range, data.segment_width);
             for tree_range in data.tree_leafs_data.tree_ranges {
                 for range in tree_range.ranges {
-                    f(tree_range.path.clone(), range.range, range.segment_width);
+                    f(tree_range.store_path.clone(), tree_range.file_path.clone(), range.range, range.segment_width);
                 }
             }
         }
@@ -1637,7 +1688,7 @@ impl<
         fill_buf: bool,
         tree_leafs_data: Option<&TreeLeafData>,
     ) -> Result<(Vec<LeafNodeData>,
-                 Vec<(String, &S)>,
+                 Vec<(String, String, &S)>,
                  Vec<TreeRanges>)> {
         match &self.data {
             Data::TopTree(_) => {
@@ -1648,7 +1699,7 @@ impl<
             },
             Data::BaseTree(_) => {
                 let mut nodes = Vec::new();
-                let mut stores = Vec::<(String, &S)>::new();
+                let mut stores = Vec::<(String, String, &S)>::new();
                 let mut tree_ranges = Vec::<TreeRanges>::new();
 
                 let mut ranges = Vec::new();
@@ -1665,12 +1716,6 @@ impl<
 
                 ensure!(self.data.store().is_some(), "store data required");
                 let store = self.data.store().unwrap();
-                let path = match store.path() {
-                    Some(path) => path.as_path().display().to_string(),
-                    None => "/tmp-xxxxxxx".to_string(),
-                };
-
-                stores.push((path.clone(), store));
 
                 for challenge in challenges {
                     let i = challenge;
@@ -1749,8 +1794,11 @@ impl<
                         partial_row_count: partial_row_count,
                     });
 
-                    match self.get_tree_ranges(i, branches, rows_to_discard, path.clone()) {
-                        Ok(ranges) => tree_ranges.extend(ranges),
+                    match self.get_tree_ranges(i, branches, rows_to_discard) {
+                        Ok((ranges, tree_stores)) => {
+                            tree_ranges.extend(ranges);
+                            stores.extend(tree_stores);
+                        },
                         Err(_) => {}
                     }
                 }
@@ -1758,12 +1806,25 @@ impl<
                 tree_ranges = self.merge_tree_ranges(tree_ranges);
 
                 for (i, range) in ranges.iter().enumerate() {
+                    let file_path = match store.path_by_range(range.clone()) {
+                        Some(path) => path.as_path().display().to_string(),
+                        None => "/tmp-xxxxxxx".to_string(),
+                    };
+                    let store_path = match store.path() {
+                        Some(path) => path.as_path().display().to_string(),
+                        None => "/tmp-xxxxxxx".to_string(),
+                    };
+
+                    stores.push((store_path.clone(), file_path.clone(), store));
+
                     nodes.push(
                         LeafNodeData {
-                            path: path.clone(),
+                            file_path: file_path.clone(),
+                            store_path: store_path.clone(),
                             data: if fill_buf {
                                 self.read_buf_from_tree_ranges_bufs(
-                                    path.clone(),
+                                    store_path.clone(),
+                                    file_path.clone(),
                                     range.start,
                                     tree_leafs_data.unwrap().tree_ranges.clone(),
                                     tree_leafs_data.unwrap().tree_bufs.clone())
@@ -1922,13 +1983,15 @@ impl<
 
     fn read_buf_from_tree_ranges_bufs(
         &self,
-        path: String,
+        store_path: String,
+        file_path: String,
         leaf_index: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<Vec<u8>> {
         for (i, tree_range) in tree_ranges.iter().enumerate() {
-            if tree_range.path != path {
+            if tree_range.store_path != store_path ||
+                tree_range.file_path != file_path {
                 continue
             }
 
@@ -1942,30 +2005,33 @@ impl<
                 }
             }
         }
-        Err(anyhow!("fail to find tree {} - leaf {}", path, leaf_index))
+        Err(anyhow!("fail to find tree {} | {} - leaf {}", store_path, file_path, leaf_index))
     }
 
     fn read_from_tree_ranges_bufs(
         &self,
-        path: String,
+        store_path: String,
+        file_path: String,
         leaf_index: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<E> {
-        match self.read_buf_from_tree_ranges_bufs(path.clone(), leaf_index, tree_ranges, tree_bufs) {
+        match self.read_buf_from_tree_ranges_bufs(store_path.clone(), file_path.clone(), leaf_index, tree_ranges, tree_bufs) {
             Ok(buf) => Ok(E::from_slice(&buf[0..E::byte_len()])),
-            Err(_) => Err(anyhow!("fail to read tree buf {} - leaf {}", path, leaf_index)),
+            Err(_) => Err(anyhow!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index)),
         }
     }
 
     fn read_from_leaf_data_tree_bufs(
         &self,
-        path: String,
+        store_path: String,
+        file_path: String,
         leaf_index: usize,
         leaf_data: LeafNodeData,
     ) -> Result<E> {
         self.read_from_tree_ranges_bufs(
-            path,
+            store_path,
+            file_path,
             leaf_index,
             leaf_data.tree_leafs_data.tree_ranges,
             leaf_data.tree_leafs_data.tree_bufs,
@@ -2008,11 +2074,22 @@ impl<
             }
             Data::BaseTree(data) => {
                 // Read from the base layer tree data.
-                let path = match data.path() {
+                let range = Range {
+                    index: i,
+                    start: i,
+                    end: i + 1,
+                    buf_start: 0,
+                    buf_end: 0,
+                };
+                let file_path = match data.path_by_range(range.clone()) {
                     Some(path) => path.as_path().display().to_string(),
                     None => "/tmp-xxxxxxx".to_string(),
                 };
-                self.read_from_leaf_data_tree_bufs(path, i, leaf_data)
+                let store_path = match data.path() {
+                    Some(path) => path.as_path().display().to_string(),
+                    None => "/tmp-xxxxxxx".to_string(),
+                };
+                self.read_from_leaf_data_tree_bufs(store_path, file_path, i, leaf_data)
             }
         }
     }

@@ -58,6 +58,7 @@ pub struct Range {
 
 #[derive(Clone)]
 pub struct ExternalReader<R: Read + Send + Sync> {
+    pub data_path: PathBuf,
     pub offset: usize,
     pub source: R,
     pub path: String,
@@ -199,6 +200,7 @@ impl ExternalReader<std::fs::File> {
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
             source: tempfile()?,
+            data_path: replica_config.path.clone(),
             path: replica_config.path.as_path().display().to_string(),
             read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
                 if oss {
@@ -468,6 +470,7 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
     fn read_ranges_into(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>>;
 
     fn path(&self) -> Option<&PathBuf>;
+    fn path_by_range(&self, range: Range) -> Option<&PathBuf>;
 
     fn len(&self) -> usize;
     fn loaded_from_disk(&self) -> bool;

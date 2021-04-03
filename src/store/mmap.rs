@@ -246,6 +246,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
             .collect())
     }
 
+    fn path_by_range(&self, _range: Range) -> Option<&PathBuf> {
+        Some(&self.path)
+    }
+
     fn path(&self) -> Option<&PathBuf> {
         Some(&self.path)
     }
