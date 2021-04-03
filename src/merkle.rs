@@ -1547,7 +1547,7 @@ impl<
         tree_ranges: Vec<TreeRanges>,
         stores: Vec<(String, String, &S)>,
     ) -> Vec<Vec<u8>> {
-        tree_ranges.iter().map(|tree_range| {
+        tree_ranges.par_iter().map(|tree_range| {
             debug!("start read tree ranges from {} | {}", tree_range.store_path, tree_range.file_path);
 
             let mut total_buf_size = 0;
