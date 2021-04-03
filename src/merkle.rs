@@ -1560,7 +1560,6 @@ impl<
             let mut results = Vec::<Result<usize>>::new();
 
             for (store_path, file_path, sto) in stores.clone() {
-                info!("try to read tree ranges from store {} | {}", store_path, file_path);
                 if store_path == tree_range.store_path.clone() &&
                     file_path == tree_range.file_path.clone() {
                     let mut ranges = Vec::new();
@@ -1617,16 +1616,12 @@ impl<
         challenges: Vec<usize>,
         rows_to_discard: Option<usize>,
     ) -> Result<Vec<LeafNodeData>> {
-        info!("read leafs: prepare leafs data buffer for {:?}", challenges);
         let (leafs_data, stores, _tree_ranges) = self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, false, None)?;
-        info!("read leafs: read leafs data for {:?} from {:?}", challenges, stores);
         let tree_leafs_data = self.read_tree_leafs_data(leafs_data, stores)?;
-        info!("read leafs: generate lemma from leafs data for {:?}", challenges);
         let result = match self.read_leafs_with_fill_buf(challenges.clone(), rows_to_discard, true, Some(&tree_leafs_data)) {
             Ok((leafs_data, _, _)) => Ok(leafs_data),
             Err(_) => Err(anyhow!("fail to read leafs data with fill buf")),
         };
-        info!("read leafs: done leafs data for {:?}", challenges);
         result
     }
 
