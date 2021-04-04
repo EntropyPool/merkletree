@@ -21,7 +21,6 @@ use crate::hash::Algorithm;
 use crate::merkle::{get_merkle_tree_row_count, log2_pow2, next_pow2, Element};
 
 use s3::bucket::Bucket;
-// use s3::command::HttpRange;
 use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
@@ -50,6 +49,7 @@ pub use vec::VecStore;
 #[derive(Debug, Copy, Clone)]
 pub struct Range {
     pub index: usize,
+    pub offset: usize,
     pub start: usize,
     pub end: usize,
     pub buf_start: usize,
@@ -77,8 +77,9 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
         for range in ranges {
             off_ranges.push(Range {
                 index: range.index,
-                start: self.offset + range.start,
-                end: self.offset + range.end,
+                start: range.offset + range.start,
+                end: range.offset + range.end,
+                offset: range.offset,
                 buf_start: range.buf_start,
                 buf_end: range.buf_end,
             });
@@ -208,6 +209,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
 
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
+        info!("create external reader: {:?} | {}", replica_config.path.clone(), replica_config.offsets[index]);
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
             source: tempfile()?,
@@ -482,6 +484,7 @@ pub trait Store<E: Element>: std::fmt::Debug + Send + Sync + Sized {
 
     fn path(&self) -> Option<&PathBuf>;
     fn path_by_range(&self, range: Range) -> Option<&PathBuf>;
+    fn offset_by_range(&self, range: Range) -> usize;
 
     fn len(&self) -> usize;
     fn loaded_from_disk(&self) -> bool;

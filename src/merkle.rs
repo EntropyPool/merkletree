@@ -1374,6 +1374,7 @@ impl<
                 index: i,
                 start: i,
                 end: i + 1,
+                offset: 0,
                 buf_start: 0,
                 buf_end: 0,
             },
@@ -1415,6 +1416,8 @@ impl<
             Some(path) => path.as_path().display().to_string(),
             None => "/tmp-xxxxxxx".to_string(),
         };
+        let range_offset = store.offset_by_range(range.range);
+        range.range.offset = range_offset;
 
         range.segment_width = segment_width;
         ranges.push(TreeRanges {
@@ -1444,6 +1447,8 @@ impl<
                             Some(path) => path.as_path().display().to_string(),
                             None => "/tmp-xxxxxxx".to_string(),
                         };
+                        let range_offset = store.offset_by_range(segment_range.range);
+                        segment_range.range.offset = range_offset;
 
                         stores.push((store_path.clone(), file_path.clone(), store.clone()));
 
@@ -1579,7 +1584,7 @@ impl<
                         ranges.push(range.range.clone());
                     }
 
-                    results = match sto.read_ranges_into(ranges, &mut buf) {
+                    results = match sto.read_ranges_into(ranges.clone(), &mut buf) {
                         Ok(results) => results,
                         Err(_) => {
                             debug!("  fail read from {} | {}",
@@ -1589,6 +1594,7 @@ impl<
                             Vec::new()
                         },
                     };
+
                     break;
                 }
             }
@@ -1794,13 +1800,17 @@ impl<
 
                     let buf_end = total_buf_size + segment_width * E::byte_len();
 
-                    ranges.push(Range {
+                    let mut my_range = Range {
                         index: i,
                         start: segment_start,
                         end: segment_end,
+                        offset: 0,
                         buf_start: total_buf_size,
                         buf_end: buf_end,
-                    });
+                    };
+                    let range_offset = store.offset_by_range(my_range.clone());
+                    my_range.offset = range_offset;
+                    ranges.push(my_range);
 
                     total_buf_size = buf_end;
 
@@ -1831,6 +1841,16 @@ impl<
                         Some(path) => path.as_path().display().to_string(),
                         None => "/tmp-xxxxxxx".to_string(),
                     };
+                    let range_offset = store.offset_by_range(range.clone());
+
+                    let my_range = Range {
+                        index: range.index,
+                        start: range.start,
+                        end: range.end,
+                        offset: range_offset,
+                        buf_start: range.buf_start,
+                        buf_end: range.buf_end,
+                    };
 
                     stores.push((store_path.clone(), file_path.clone(), store));
 
@@ -1849,7 +1869,7 @@ impl<
                                 Ok(Vec::new())
                             },
                             challenge: range.index,
-                            range: range.clone(),
+                            range: my_range.clone(),
                             branches: infos[i].branches,
                             partial_row_count: infos[i].partial_row_count,
                             segment_width: infos[i].segment_width,
@@ -2107,6 +2127,7 @@ impl<
                     index: i,
                     start: i,
                     end: i + 1,
+                    offset: 0,
                     buf_start: 0,
                     buf_end: 0,
                 };

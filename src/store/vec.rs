@@ -108,6 +108,10 @@ impl<E: Element> Store<E> for VecStore<E> {
         Ok(self.0.index(r).to_vec())
     }
 
+    fn offset_by_range(&self, _range: Range) -> usize {
+        0
+    }
+
     fn path_by_range(&self, _range: Range) -> Option<&PathBuf> {
         None
     }

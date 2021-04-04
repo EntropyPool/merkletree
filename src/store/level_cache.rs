@@ -493,14 +493,23 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             .collect())
     }
 
+    fn offset_by_range(&self, range: Range) -> usize {
+        let start = range.start * self.elem_len;
+
+        // If an external reader was specified for the base layer, use it.
+        if start < self.data_width * self.elem_len && self.reader.is_some() {
+            return self.reader.as_ref().unwrap().offset;
+        }
+
+        0
+    }
+
     fn path_by_range(&self, range: Range) -> Option<&PathBuf> {
         let start = range.start * self.elem_len;
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {
-            // TODO: for now there is a bug to merge sealed read, so just read sealed with cache
-            // in future this may be optimized to use less connection
-            // return Some(&self.reader.as_ref().unwrap().data_path);
+            return Some(&self.reader.as_ref().unwrap().data_path);
         }
 
         Some(&self.data_path)

@@ -246,6 +246,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
             .collect())
     }
 
+    fn offset_by_range(&self, _range: Range) -> usize {
+        0
+    }
+
     fn path_by_range(&self, _range: Range) -> Option<&PathBuf> {
         Some(&self.path)
     }
