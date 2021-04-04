@@ -209,7 +209,6 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
 
 impl ExternalReader<std::fs::File> {
     pub fn new_from_config(replica_config: &ReplicaConfig, index: usize) -> Result<Self> {
-        info!("create external reader: {:?} | {}", replica_config.path.clone(), replica_config.offsets[index]);
         Ok(ExternalReader {
             offset: replica_config.offsets[index],
             source: tempfile()?,
