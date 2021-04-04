@@ -498,6 +498,8 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {
+            // TODO: for now there is a bug to merge sealed read, so just read sealed with cache
+            // in future this may be optimized to use less connection
             // return Some(&self.reader.as_ref().unwrap().data_path);
         }
 
