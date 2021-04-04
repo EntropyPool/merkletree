@@ -1449,7 +1449,8 @@ impl<
 
                         let mut inserted = false;
                         for range in ranges.iter_mut() {
-                            if range.store_path == store_path && range.file_path == file_path {
+                            if /* range.store_path == store_path && */
+                                range.file_path == file_path {
                                 range.ranges.push(segment_range.clone());
                                 inserted = true;
                                 break;
@@ -1482,7 +1483,7 @@ impl<
         for tree_range in tree_ranges {
             let mut tree_found = false;
             for dedup_tree_range in dedup_tree_ranges.iter_mut() {
-                if dedup_tree_range.store_path == tree_range.store_path &&
+                if /* dedup_tree_range.store_path == tree_range.store_path && */
                     dedup_tree_range.file_path == tree_range.file_path {
                     tree_found = true;
                     let mut range_found = false;
@@ -1546,7 +1547,7 @@ impl<
         &self,
         tree_ranges: Vec<TreeRanges>,
         stores: Vec<(String, String, &S)>,
-    ) -> Vec<Vec<u8>> {
+    ) -> Vec<(TreeRanges, Vec<u8>)> {
         tree_ranges.par_iter().map(|tree_range| {
             debug!("start read tree ranges from {} | {}", tree_range.store_path, tree_range.file_path);
 
@@ -1560,11 +1561,11 @@ impl<
             let mut results = Vec::<Result<usize>>::new();
 
             for (store_path, file_path, sto) in stores.clone() {
-                if store_path == tree_range.store_path.clone() &&
+                if /* store_path == tree_range.store_path.clone() && */
                     file_path == tree_range.file_path.clone() {
                     let mut ranges = Vec::new();
 
-                    debug!("read ranges from {} | {} | {:?}", store_path, file_path, sto);
+                    debug!("read ranges from {} | {}", store_path, file_path);
                     for range in tree_range.ranges.clone() {
                         debug!("  start: {} | {} | {}, end {} | {} from {} | {}",
                             range.range.index,
@@ -1587,7 +1588,7 @@ impl<
             }
 
             if results.len() == 0 {
-                return Vec::new();
+                return (tree_range.clone(), Vec::new());
             }
 
             let mut error_happen = false;
@@ -1604,9 +1605,9 @@ impl<
             debug!("done read tree ranges from {} | {}", tree_range.store_path, tree_range.file_path);
 
             if !error_happen {
-                buf
+                (tree_range.clone(), buf)
             } else {
-                Vec::new()
+                (tree_range.clone(), Vec::new())
             }
         }).collect()
     }
@@ -1640,8 +1641,8 @@ impl<
             };
 
             for (i, tree_range) in tree_ranges.clone().iter().enumerate() {
-                if tree_range.file_path == file_path.clone() &&
-                    tree_range.store_path == store_path.clone() {
+                if /* tree_range.store_path == store_path.clone() && */
+                tree_range.file_path == file_path.clone() {
                     tree_exists = true;
                     tree_ranges[i].ranges.push(segment_range);
                     break;
@@ -1668,7 +1669,14 @@ impl<
         tree_ranges = self.merge_tree_ranges(tree_ranges);
         tree_ranges = self.caculate_tree_offset(tree_ranges);
 
-        let tree_bufs = self.read_tree_ranges(tree_ranges.clone(), stores.clone());
+        let tree_leafs_data = self.read_tree_ranges(tree_ranges.clone(), stores.clone());
+        let mut tree_ranges = Vec::new();
+        let mut tree_bufs = Vec::new();
+
+        for (tree_range, buf) in tree_leafs_data {
+            tree_ranges.push(tree_range.clone());
+            tree_bufs.push(buf);
+        }
 
         Ok(TreeLeafData {
             tree_ranges,
@@ -1963,7 +1971,7 @@ impl<
                 // let proof = self.gen_proof_with_partial_tree(i, leaf_data.rows_to_discard.unwrap(), &partial_tree)?;
                 let proof = self.gen_proof_with_partial_tree_with_leaf_data(i, leaf_data.clone(), &partial_tree)?;
 
-                info!(
+                debug!(
                     "generated partial_tree of row_count {} and len {} with {} branches for proof at {} with leaf data",
                     partial_tree.row_count,
                     partial_tree.len(),
@@ -1985,13 +1993,23 @@ impl<
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<Vec<u8>> {
         for (i, tree_range) in tree_ranges.iter().enumerate() {
-            if tree_range.store_path != store_path ||
+            if /* tree_range.store_path != store_path || */
                 tree_range.file_path != file_path {
                 continue
             }
 
+            debug!("try to find leaf {} from {} | {}", leaf_index, file_path, i);
+
             for range in tree_range.ranges.clone() {
-                if range.range.start == leaf_index {
+                let leaf_range = range.range.clone();
+                if leaf_range.start == leaf_index {
+                    debug!("find leaf {}: {} | {} - {} | {} from {}",
+                           leaf_index,
+                           leaf_range.start,
+                           leaf_range.buf_start,
+                           leaf_range.end,
+                           leaf_range.buf_end,
+                           file_path);
                     if tree_bufs[i].len() == 0 {
                         return Err(anyhow!("fail to read tree buf {} - leaf {}", i, leaf_index));
                     } else {

@@ -31,7 +31,7 @@ use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
 
-use log::{info, debug};
+use log::debug;
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -498,7 +498,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {
-            return Some(&self.reader.as_ref().unwrap().data_path);
+            // return Some(&self.reader.as_ref().unwrap().data_path);
         }
 
         Some(&self.data_path)
@@ -934,10 +934,25 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         let mut direct_ranges = Vec::new();
         let mut direct_sizes = Vec::new();
 
+        debug!("READ RANGES from {} | {}", self.path, ranges.len());
+
         for range in ranges.clone() {
             let start = range.start * self.elem_len;
             let end = range.end * self.elem_len;
             let read_len = end - start;
+
+            debug!("  start: {} | {}, end: {} | {} - {}, from reader {} ({} <=? {} * {} = {}) in {}",
+                range.start,
+                start,
+                range.end,
+                end,
+                self.elem_len,
+                start <= self.data_width * self.elem_len,
+                start,
+                self.data_width,
+                self.elem_len,
+                self.data_width * self.elem_len,
+                self.path);
 
             ensure!(
                 start <= self.data_width * self.elem_len || start >= self.cache_index_start,
