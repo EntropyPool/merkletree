@@ -31,7 +31,7 @@ use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
 
-use log::debug;
+use log::{debug, error};
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -969,9 +969,16 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 reader_ranges.push(range);
             } else {
                 if !self.oss {
+                    direct_ranges.push(range);
                     match self.store_read_into(start, end, &mut buf[range.buf_start..range.buf_end]) {
-                        Err(_) => direct_sizes.push(Err(anyhow!("fail to read file"))),
-                        Ok(_) => direct_sizes.push(Ok(read_len)),
+                        Err(_) => {
+                            error!("fail to read {}-{} from {} local cache", start, end, self.path);
+                            direct_sizes.push(Err(anyhow!("fail to read file")));
+                        },
+                        Ok(_) => {
+                            error!("success to read {}-{} from {} local cache", start, end, self.path);
+                            direct_sizes.push(Ok(read_len));
+                        }
                     }
                 } else {
                     let adjusted_start = if start >= self.cache_index_start {
@@ -1023,7 +1030,10 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 if direct_range.index == range.index {
                     match direct_sizes[j] {
                         Ok(size) => return_sizes.push(Ok(size)),
-                        Err(_) => return_sizes.push(Err(anyhow!("fail to read range"))),
+                        Err(_) => {
+                            error!("fail to read {}-{} from {} cache", range.start, range.end, self.path);
+                            return_sizes.push(Err(anyhow!("fail to read range")));
+                        }
                     }
                     inserted = true;
                     break;
@@ -1038,7 +1048,10 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 if reader_range.index == range.index {
                     match reader_sizes[j] {
                         Ok(size) => return_sizes.push(Ok(size)),
-                        Err(_) => return_sizes.push(Err(anyhow!("fail to read range"))),
+                        Err(_) => {
+                            error!("fail to read {}-{} from {} reader", range.start, range.end, self.path);
+                            return_sizes.push(Err(anyhow!("fail to read range")));
+                        }
                     }
                     break;
                 }
@@ -1081,8 +1094,8 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 start
             };
 
+            let read_len = end - start;
             if self.oss {
-                let read_len = end - start;
                 read_from_oss(
                     adjusted_start,
                     adjusted_start + read_len,
@@ -1097,6 +1110,12 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                         )
                 })?;
             } else {
+                debug!("read cache leaf {} | {}-{} | {} from local file {}",
+                       start,
+                       adjusted_start,
+                       end,
+                       adjusted_start + read_len,
+                       self.path);
                 self.file
                     .read_exact_at(adjusted_start as u64, buf)
                     .with_context(|| {
