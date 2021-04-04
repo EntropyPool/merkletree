@@ -81,7 +81,12 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
                 end: self.offset + range.end,
                 buf_start: range.buf_start,
                 buf_end: range.buf_end,
-            })
+            });
+            debug!("reader read ranges {}-{} | {} | {}",
+                   range.start,
+                   range.end,
+                   self.offset,
+                   self.path.clone());
         }
         (self.read_ranges)(off_ranges, buf, self.path.clone(), self.oss, &self.oss_config)
     }

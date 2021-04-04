@@ -943,7 +943,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             let end = range.end * self.elem_len;
             let read_len = end - start;
 
-            debug!("  start: {} | {}, end: {} | {} - {}, from reader {} ({} <=? {} * {} = {}) in {}",
+            debug!("  start: {} | {}, end: {} | {} - {}, from reader {} ({} <=? {} * {} = {}) in {} | {:?}",
                 range.start,
                 start,
                 range.end,
@@ -954,7 +954,8 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                 self.data_width,
                 self.elem_len,
                 self.data_width * self.elem_len,
-                self.path);
+                self.path,
+                self.reader.as_ref().unwrap().data_path);
 
             ensure!(
                 start <= self.data_width * self.elem_len || start >= self.cache_index_start,
