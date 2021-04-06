@@ -14,7 +14,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::{warn, info, debug};
+use log::{warn, debug};
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
@@ -218,7 +218,7 @@ impl ExternalReader<std::fs::File> {
                 if oss {
                     read_from_oss(start, end, buf, path, oss_config)?;
                 } else {
-                    info!("read from local: start {}, end {}, path {}", start, end, path);
+                    debug!("read from local: start {}, end {}, path {}", start, end, path);
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
                 }
@@ -229,9 +229,9 @@ impl ExternalReader<std::fs::File> {
                     read_ranges_from_oss(ranges, buf, path, oss_config)
                 } else {
                     let mut sizes = Vec::new();
-                    info!("multi read from local {} start", path);
+                    debug!("multi read from local {} start", path);
                     for range in ranges {
-                        info!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
+                        debug!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
                                range.start, range.buf_start, range.end, range.buf_end,
                                path, buf.len(), range.index);
                         let reader = OpenOptions::new().read(true).open(&path)?;
@@ -239,7 +239,7 @@ impl ExternalReader<std::fs::File> {
                         reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_end])?;
                         sizes.push(Ok(read_len));
                     }
-                    info!("multi read from local {} done", path);
+                    debug!("multi read from local {} done", path);
                     Ok(sizes)
                 }
             },

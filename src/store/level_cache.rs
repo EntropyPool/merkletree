@@ -509,7 +509,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
 
         // If an external reader was specified for the base layer, use it.
         if start < self.data_width * self.elem_len && self.reader.is_some() {
-            return Some(&self.reader.as_ref().unwrap().data_path);
+            // return Some(&self.reader.as_ref().unwrap().data_path);
         }
 
         Some(&self.data_path)
@@ -986,7 +986,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                             direct_sizes.push(Err(anyhow!("fail to read file")));
                         },
                         Ok(_) => {
-                            error!("success to read {}-{} from {} local cache", start, end, self.path);
                             direct_sizes.push(Ok(read_len));
                         }
                     }

@@ -2046,6 +2046,7 @@ impl<
                            file_path,
                            tree_bufs[i].len());
                     if tree_bufs[i].len() == 0 {
+                        error!("fail to read tree buf {} - leaf {} | {} | {}", i, leaf_index, store_path, file_path);
                         return Err(anyhow!("fail to read tree buf {} - leaf {}", i, leaf_index));
                     } else {
                         let buf = tree_bufs[i][range.range.buf_start..range.range.buf_end].to_vec();
@@ -2054,6 +2055,7 @@ impl<
                 }
             }
         }
+        error!("fail to find tree buf leaf {} | {} | {}", leaf_index, store_path, file_path);
         Err(anyhow!("fail to find tree {} | {} - leaf {}", store_path, file_path, leaf_index))
     }
 
@@ -2067,7 +2069,10 @@ impl<
     ) -> Result<E> {
         match self.read_buf_from_tree_ranges_bufs(store_path.clone(), file_path.clone(), leaf_index, tree_ranges, tree_bufs) {
             Ok(buf) => Ok(E::from_slice(&buf[0..E::byte_len()])),
-            Err(_) => Err(anyhow!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index)),
+            Err(_) => {
+                error!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index);
+                Err(anyhow!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index))
+            }
         }
     }
 
@@ -2172,6 +2177,7 @@ impl<
 
         let data_width = width;
         let total_size = get_merkle_tree_len(data_width, branches)?;
+
         let cache_size = get_merkle_tree_cache_size(self.leafs, branches, rows_to_discard)?;
         let cache_index_start = total_size - cache_size;
         let cached_leafs = get_merkle_tree_leafs(cache_size, branches)?;
