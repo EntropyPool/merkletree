@@ -986,7 +986,6 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
                             direct_sizes.push(Err(anyhow!("fail to read file")));
                         },
                         Ok(_) => {
-                            error!("success to read {}-{} from {} local cache", start, end, self.path);
                             direct_sizes.push(Ok(read_len));
                         }
                     }
