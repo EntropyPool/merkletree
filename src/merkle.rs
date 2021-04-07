@@ -226,11 +226,13 @@ impl TreeRanges {
     pub fn dump(&self) {
         info!("TREE {} | {}", self.store_path, self.file_path);
         for range in self.ranges.clone() {
-            debug!("  segment width: {} | {} | {}-{}",
+            debug!("  segment width: {} | {} | {}-{} | {} | {}",
                   range.segment_width,
                   range.range.index,
                   range.range.start,
-                  range.range.end);
+                  range.range.end,
+                  self.store_path,
+                  self.file_path);
         }
     }
 }
@@ -1490,13 +1492,12 @@ impl<
             for dedup_tree_range in dedup_tree_ranges.iter_mut() {
                 if /* dedup_tree_range.store_path == tree_range.store_path && */
                     dedup_tree_range.file_path == tree_range.file_path {
-                    tree_found = true;
-                    let mut range_found = false;
 
+                    tree_found = true;
                     for range in tree_range.ranges.iter() {
+                        let mut range_found = false;
                         for dedup_range in dedup_tree_range.ranges.iter() {
-                            if range.range.index == dedup_range.range.index &&
-                                range.range.start == dedup_range.range.start &&
+                            if range.range.start == dedup_range.range.start &&
                                 range.range.end == dedup_range.range.end {
                                 range_found = true;
                                 break;
@@ -1506,6 +1507,8 @@ impl<
                             dedup_tree_range.ranges.push(range.clone());
                         }
                     }
+
+                    break;
                 }
             }
             if !tree_found {
@@ -1587,7 +1590,7 @@ impl<
                     results = match sto.read_ranges_into(ranges.clone(), &mut buf) {
                         Ok(results) => results,
                         Err(_) => {
-                            debug!("  fail read from {} | {}",
+                            error!("  fail read from {} | {}",
                                 store_path,
                                 file_path,
                             );
@@ -1680,7 +1683,7 @@ impl<
         }
 
         tree_ranges = self.merge_tree_ranges(tree_ranges);
-        debug!("DUMP FULL TREE -------");
+        debug!("DUMP FULL TREE AFTER MERGE -------");
         for tree_range in tree_ranges.clone() {
             debug!("  {} | {} | {}", tree_range.store_path, tree_range.file_path, tree_range.ranges.len());
         }
@@ -1826,7 +1829,9 @@ impl<
                             tree_ranges.extend(ranges);
                             stores.extend(tree_stores);
                         },
-                        Err(_) => {}
+                        Err(_) => {
+                            error!("fail to get tree ranges for leaf {}", i);
+                        }
                     }
                 }
 
@@ -2037,16 +2042,17 @@ impl<
             for range in tree_range.ranges.clone() {
                 let leaf_range = range.range.clone();
                 if leaf_range.start == leaf_index {
-                    debug!("find leaf {}: {} | {} - {} | {} from {} | buf len {}",
+                    debug!("find leaf {}: {} | {} - {} | {} from {} | buf len {} | {}",
                            leaf_index,
                            leaf_range.start,
                            leaf_range.buf_start,
                            leaf_range.end,
                            leaf_range.buf_end,
                            file_path,
-                           tree_bufs[i].len());
+                           tree_bufs[i].len(),
+                           i);
                     if tree_bufs[i].len() == 0 {
-                        error!("fail to read tree buf {} - leaf {} | {} | {}", i, leaf_index, store_path, file_path);
+                        error!("fail to read tree buf len=0 {} - leaf {} | {} | {}", i, leaf_index, store_path, file_path);
                         return Err(anyhow!("fail to read tree buf {} - leaf {}", i, leaf_index));
                     } else {
                         let buf = tree_bufs[i][range.range.buf_start..range.range.buf_end].to_vec();
@@ -2070,7 +2076,7 @@ impl<
         match self.read_buf_from_tree_ranges_bufs(store_path.clone(), file_path.clone(), leaf_index, tree_ranges, tree_bufs) {
             Ok(buf) => Ok(E::from_slice(&buf[0..E::byte_len()])),
             Err(_) => {
-                error!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index);
+                error!("fail to read tree buf range {} | {} - leaf {}", store_path, file_path, leaf_index);
                 Err(anyhow!("fail to read tree buf {} | {} - leaf {}", store_path, file_path, leaf_index))
             }
         }
@@ -2232,7 +2238,6 @@ impl<
             "Data slice must not have a top layer"
         );
 
-        // lemma.push(self.read_at(j)?);
         lemma.push(self.read_from_leaf_data(j, leaf_data.clone())?);
         while base + 1 < self.len() {
             let hash_index = (j / branches) * branches;
@@ -2241,7 +2246,6 @@ impl<
                     let read_index = base + k;
                     lemma.push(
                         if read_index < data_width || read_index >= cache_index_start {
-                            // self.read_at(base + k)?
                             self.read_from_leaf_data(base + k, leaf_data.clone())?
                         } else {
                             let read_index = partial_base + k - segment_shift;
