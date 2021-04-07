@@ -1868,6 +1868,7 @@ impl<
                                     store_path.clone(),
                                     file_path.clone(),
                                     range.start,
+                                    range.buf_end - range.buf_start,
                                     tree_leafs_data.unwrap().tree_ranges.clone(),
                                     tree_leafs_data.unwrap().tree_bufs.clone())
                             } else {
@@ -2028,6 +2029,7 @@ impl<
         store_path: String,
         file_path: String,
         leaf_index: usize,
+        len: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<Vec<u8>> {
@@ -2041,7 +2043,8 @@ impl<
 
             for range in tree_range.ranges.clone() {
                 let leaf_range = range.range.clone();
-                if leaf_range.start == leaf_index {
+                if leaf_range.start == leaf_index &&
+                    len <= range.range.buf_end - range.range.buf_start {
                     debug!("find leaf {}: {} | {} - {} | {} from {} | buf len {} | {}",
                            leaf_index,
                            leaf_range.start,
@@ -2073,7 +2076,13 @@ impl<
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<E> {
-        match self.read_buf_from_tree_ranges_bufs(store_path.clone(), file_path.clone(), leaf_index, tree_ranges, tree_bufs) {
+        match self.read_buf_from_tree_ranges_bufs(
+            store_path.clone(),
+            file_path.clone(),
+            leaf_index,
+            E::byte_len(),
+            tree_ranges,
+            tree_bufs) {
             Ok(buf) => Ok(E::from_slice(&buf[0..E::byte_len()])),
             Err(_) => {
                 error!("fail to read tree buf range {} | {} - leaf {}", store_path, file_path, leaf_index);
