@@ -18,7 +18,7 @@ use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
 use typenum::marker_traits::Unsigned;
 use typenum::{U2, U3, U4, U5, U7, U8};
-use log::{error, trace};
+use log::{error, trace, info};
 use rand::Rng;
 
 use crate::test_common::{get_vec_tree_from_slice, BINARY_ARITY, OCT_ARITY, QUAD_ARITY, XOR128};
@@ -285,6 +285,7 @@ fn test_levelcache_v1_tree_from_iter<U: Unsigned>(
         let mut rng = rand::thread_rng();
         challenges.push(rng.gen_range(0, leafs));
     }
+    info!("test data 1: {:?} | {} | {}", challenges, num_challenges, leafs);
     let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
 
@@ -345,6 +346,7 @@ fn test_levelcache_direct_build_from_slice<U: Unsigned>(
         let mut rng = rand::thread_rng();
         challenges.push(rng.gen_range(0, leafs));
     }
+    info!("test data 2: {:?} | {} | {}", challenges, num_challenges, leafs);
     let leafs_data = lc_tree.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
 
@@ -406,6 +408,7 @@ fn test_levelcache_direct_build_from_iter<U: Unsigned>(
         let mut rng = rand::thread_rng();
         challenges.push(rng.gen_range(0, leafs));
     }
+    info!("test data 3: {:?} | {} | {}", challenges, num_challenges, leafs);
     let leafs_data = lc_tree.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
 
@@ -667,6 +670,7 @@ fn test_compound_levelcache_tree_from_store_configs<B: Unsigned, N: Unsigned>(
         let mut rng = rand::thread_rng();
         challenges.push(rng.gen_range(0, tree.leafs()));
     }
+    info!("test data 4: {:?} | {} | {}", challenges, tree.leafs(), tree.leafs());
     let leafs_data = tree.read_leafs(challenges, None).
         expect("cannot read leafs");
 
@@ -1359,6 +1363,7 @@ fn test_level_cache_tree_v2() {
         let mut rng = rand::thread_rng();
         challenges.push(rng.gen_range(0, mt_level_cache.leafs()));
     }
+    info!("test data 5: {:?} | {} | {}", challenges, mt_level_cache.leafs(), mt_level_cache.leafs());
     let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
 
@@ -1532,6 +1537,7 @@ fn test_various_trees_with_partial_cache_v2_only() {
                 let mut rng = rand::thread_rng();
                 challenges.push(rng.gen_range(0, mt_level_cache.leafs()));
             }
+            info!("test data 6: {:?} | {} | {}", challenges, mt_level_cache.leafs(), mt_level_cache.leafs());
             let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
                 expect("cannot read leafs");
 
