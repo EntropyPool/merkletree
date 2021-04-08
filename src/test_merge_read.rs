@@ -18,7 +18,8 @@ use std::os::unix::prelude::FileExt;
 use std::path::PathBuf;
 use typenum::marker_traits::Unsigned;
 use typenum::{U2, U3, U4, U5, U7, U8};
-use log::{error, info};
+use log::{error, trace};
+use rand::Rng;
 
 use crate::test_common::{get_vec_tree_from_slice, BINARY_ARITY, OCT_ARITY, QUAD_ARITY, XOR128};
 
@@ -281,7 +282,8 @@ fn test_levelcache_v1_tree_from_iter<U: Unsigned>(
     let sector_id = 0;
     let mut challenges = vec![0usize; 0];
     for _i in 0..num_challenges {
-        challenges.push(rand::random::<usize>() % leafs);
+        let mut rng = rand::thread_rng();
+        challenges.push(rng.gen_range(0, leafs));
     }
     let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
@@ -295,7 +297,7 @@ fn test_levelcache_v1_tree_from_iter<U: Unsigned>(
                     expect("fail to read challenge");
 
                 if proof.validate::<XOR128>().expect("fail to validate") {
-                    info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                    trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                 } else {
                     error!("faulty sector by invalid proof: {:?}", sector_id);
                 }
@@ -340,7 +342,8 @@ fn test_levelcache_direct_build_from_slice<U: Unsigned>(
     let sector_id = 0;
     let mut challenges = vec![0usize; 0];
     for _i in 0..num_challenges {
-        challenges.push(rand::random::<usize>() % leafs);
+        let mut rng = rand::thread_rng();
+        challenges.push(rng.gen_range(0, leafs));
     }
     let leafs_data = lc_tree.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
@@ -354,7 +357,7 @@ fn test_levelcache_direct_build_from_slice<U: Unsigned>(
                     expect("fail to read challenge");
 
                 if proof.validate::<XOR128>().expect("fail to validate") {
-                    info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                    trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                 } else {
                     error!("faulty sector by invalid proof: {:?}", sector_id);
                 }
@@ -400,7 +403,8 @@ fn test_levelcache_direct_build_from_iter<U: Unsigned>(
     let sector_id = 0;
     let mut challenges = vec![0usize; 0];
     for _i in 0..num_challenges {
-        challenges.push(rand::random::<usize>() % leafs);
+        let mut rng = rand::thread_rng();
+        challenges.push(rng.gen_range(0, leafs));
     }
     let leafs_data = lc_tree.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
@@ -414,7 +418,7 @@ fn test_levelcache_direct_build_from_iter<U: Unsigned>(
                     expect("fail to read challenge");
 
                 if proof.validate::<XOR128>().expect("fail to validate") {
-                    info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                    trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                 } else {
                     error!("faulty sector by invalid proof: {:?}", sector_id);
                 }
@@ -660,7 +664,8 @@ fn test_compound_levelcache_tree_from_store_configs<B: Unsigned, N: Unsigned>(
     let sector_id = 0;
     let mut challenges = vec![0usize; 0];
     for _i in 0..tree.leafs() {
-        challenges.push(rand::random::<usize>() % tree.leafs());
+        let mut rng = rand::thread_rng();
+        challenges.push(rng.gen_range(0, tree.leafs()));
     }
     let leafs_data = tree.read_leafs(challenges, None).
         expect("cannot read leafs");
@@ -674,7 +679,7 @@ fn test_compound_levelcache_tree_from_store_configs<B: Unsigned, N: Unsigned>(
                     expect("fail to read challenge");
 
                 if proof.validate::<XOR128>().expect("fail to validate") {
-                    info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                    trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                 } else {
                     error!("faulty sector by invalid proof: {:?}", sector_id);
                 }
@@ -1351,7 +1356,8 @@ fn test_level_cache_tree_v2() {
     let sector_id = 0;
     let mut challenges = vec![0usize; 0];
     for _i in 0..mt_level_cache.leafs() {
-        challenges.push(rand::random::<usize>() % mt_level_cache.leafs());
+        let mut rng = rand::thread_rng();
+        challenges.push(rng.gen_range(0, mt_level_cache.leafs()));
     }
     let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
         expect("cannot read leafs");
@@ -1365,7 +1371,7 @@ fn test_level_cache_tree_v2() {
                     expect("fail to read challenge");
 
                 if proof.validate::<XOR128>().expect("fail to validate") {
-                    info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                    trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                 } else {
                     error!("faulty sector by invalid proof: {:?}", sector_id);
                 }
@@ -1523,7 +1529,8 @@ fn test_various_trees_with_partial_cache_v2_only() {
             let sector_id = 0;
             let mut challenges = vec![0usize; 0];
             for _i in 0..mt_level_cache.leafs() {
-                challenges.push(rand::random::<usize>() % mt_level_cache.leafs());
+                let mut rng = rand::thread_rng();
+                challenges.push(rng.gen_range(0, mt_level_cache.leafs()));
             }
             let leafs_data = mt_level_cache.read_leafs(challenges, Some(config.rows_to_discard)).
                 expect("cannot read leafs");
@@ -1537,7 +1544,7 @@ fn test_various_trees_with_partial_cache_v2_only() {
                             expect("fail to read challenge");
 
                         if proof.validate::<XOR128>().expect("fail to validate") {
-                            info!("pass gen cached proof: {:?} | {}", sector_id, challenge);
+                            trace!("pass gen cached proof: {:?} | {}", sector_id, challenge);
                         } else {
                             error!("faulty sector by invalid proof: {:?}", sector_id);
                         }
