@@ -183,6 +183,10 @@ pub mod test_common;
 #[cfg(test)]
 mod test_xor128;
 
+/// Tests Merge Read.
+#[cfg(test)]
+mod test_merge_read;
+
 /// Tests data.
 #[cfg(test)]
 mod test_item;

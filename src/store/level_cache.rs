@@ -1021,15 +1021,19 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
             })?;
         }
 
-        let reader_sizes = self.reader
-            .as_ref()
-            .unwrap()
-            .read_ranges(reader_ranges.clone(), buf)
-            .with_context(|| {
-                format!(
-                    "failed to read multi range",
-                )
-            })?;
+        let reader_sizes = if self.reader.is_some() {
+            self.reader
+                .as_ref()
+                .unwrap()
+                .read_ranges(reader_ranges.clone(), buf)
+                .with_context(|| {
+                    format!(
+                        "failed to read multi range",
+                        )
+                })?
+        } else {
+            Vec::new()
+        };
 
         let mut return_sizes = Vec::new();
 
