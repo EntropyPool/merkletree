@@ -226,8 +226,9 @@ impl TreeRanges {
     pub fn dump(&self) {
         info!("TREE {} | {}", self.store_path, self.file_path);
         for range in self.ranges.clone() {
-            debug!("  segment width: {} | {} | {}-{} | {} | {}",
+            debug!("  segment width: {} | {} | {} | {}-{} | {} | {}",
                   range.segment_width,
+                  range.range.offset,
                   range.range.index,
                   range.range.start,
                   range.range.end,
@@ -1497,7 +1498,8 @@ impl<
                     for range in tree_range.ranges.iter() {
                         let mut range_found = false;
                         for dedup_range in dedup_tree_range.ranges.iter() {
-                            if range.range.start == dedup_range.range.start &&
+                            if range.range.offset == dedup_range.range.offset &&
+                                range.range.start == dedup_range.range.start &&
                                 range.range.end == dedup_range.range.end {
                                 range_found = true;
                                 break;
@@ -1868,6 +1870,7 @@ impl<
                                     store_path.clone(),
                                     file_path.clone(),
                                     range.start,
+                                    range.offset,
                                     range.buf_end - range.buf_start,
                                     tree_leafs_data.unwrap().tree_ranges.clone(),
                                     tree_leafs_data.unwrap().tree_bufs.clone())
@@ -2029,6 +2032,7 @@ impl<
         store_path: String,
         file_path: String,
         leaf_index: usize,
+        offset: usize,
         len: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
@@ -2044,6 +2048,7 @@ impl<
             for range in tree_range.ranges.clone() {
                 let leaf_range = range.range.clone();
                 if leaf_range.start == leaf_index &&
+                    leaf_range.offset == offset &&
                     len <= range.range.buf_end - range.range.buf_start {
                     debug!("find leaf {}: {} | {} - {} | {} from {} | buf len {} | {}",
                            leaf_index,
@@ -2073,6 +2078,7 @@ impl<
         store_path: String,
         file_path: String,
         leaf_index: usize,
+        offset: usize,
         tree_ranges: Vec<TreeRanges>,
         tree_bufs: Vec<Vec<u8>>,
     ) -> Result<E> {
@@ -2080,6 +2086,7 @@ impl<
             store_path.clone(),
             file_path.clone(),
             leaf_index,
+            offset,
             E::byte_len(),
             tree_ranges,
             tree_bufs) {
@@ -2096,12 +2103,14 @@ impl<
         store_path: String,
         file_path: String,
         leaf_index: usize,
+        offset: usize,
         leaf_data: LeafNodeData,
     ) -> Result<E> {
         self.read_from_tree_ranges_bufs(
             store_path,
             file_path,
             leaf_index,
+            offset,
             leaf_data.tree_leafs_data.tree_ranges,
             leaf_data.tree_leafs_data.tree_bufs,
         )
@@ -2143,7 +2152,7 @@ impl<
             }
             Data::BaseTree(data) => {
                 // Read from the base layer tree data.
-                let range = Range {
+                let mut range = Range {
                     index: i,
                     start: i,
                     end: i + 1,
@@ -2159,7 +2168,8 @@ impl<
                     Some(path) => path.as_path().display().to_string(),
                     None => "/tmp-xxxxxxx".to_string(),
                 };
-                self.read_from_leaf_data_tree_bufs(store_path, file_path, i, leaf_data)
+                range.offset = data.offset_by_range(range);
+                self.read_from_leaf_data_tree_bufs(store_path, file_path, i, range.offset, leaf_data)
             }
         }
     }
