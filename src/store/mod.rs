@@ -125,7 +125,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
         Some(&oss_config.secret_key),
         None, None, None)?;
     let region = Region::Custom {
-        region: "us-west-2".to_string(),
+        region: oss_config.region.clone(),
         endpoint: oss_config.url.clone(),
     };
     let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
