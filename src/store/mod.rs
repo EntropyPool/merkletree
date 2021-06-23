@@ -1,3 +1,4 @@
+use std::time;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -100,111 +101,164 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
         Some(&oss_config.access_key),
         Some(&oss_config.secret_key),
         None, None, None)?;
-    let region = Region::Custom {
-        region: oss_config.region.clone(),
-        endpoint: oss_config.url.clone(),
-    };
-    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
-    let mut rt = Runtime::new()?;
 
-    debug!("start read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
-    let (data, code) = rt.block_on(
-        bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))).unwrap();
-    ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, oss_config.url);
-    debug!("done read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
-    buf.copy_from_slice(&data[0..end - start]);
+    debug!("read from oss: endpoints {:?}", oss_config.endpoints);
+    
+    let mut succ = false;
+    let endpoints: Vec<&str> = oss_config.endpoints.as_str().split(",").collect();
+    for url in endpoints.clone() {
+        // debug!("read from oss: url {}", url.to_string().clone());
+        let region = Region::Custom {
+            region: oss_config.region.clone(),
+            endpoint: url.to_string().clone(),
+        };
 
-    Ok(end - start)
+        let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
+        let mut rt = Runtime::new()?;
+    
+        debug!("start read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
+        let (data, code) = match rt.block_on(
+            bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))){
+                Ok(info)=>info,
+                Err(e)=>{
+                    warn!("get object range from {} error {}", url.to_string().clone(), &e);
+                    continue;
+                }
+            };
+        // ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, url);
+        if code != 200 && code != 206 {
+            warn!( "Cannot get {:?} from {} ret code {}", obj_name, url.to_string().clone(), code);
+            continue;
+        }
+
+        buf.copy_from_slice(&data[0..end - start]);
+        succ = true;
+        // success
+        break;
+    }
+    
+    if succ {
+        Ok(end - start)    
+    }else{
+        Err(anyhow!("read_from_oss cannot read info from all endpoints {:?}", endpoints.clone()))
+    }
 }
 
 pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>> {
+    let ranges_len = ranges.clone().len();
     let path_buf = PathBuf::from(path);
     let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
     let credentials = Credentials::new(
         Some(&oss_config.access_key),
         Some(&oss_config.secret_key),
         None, None, None)?;
-    let region = Region::Custom {
-        region: oss_config.region.clone(),
-        endpoint: oss_config.url.clone(),
-    };
-    let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, credentials)?;
-    let mut rt = Runtime::new()?;
-
     let mut sizes = Vec::new();
-
-    if oss_config.multi_ranges && 1 < ranges.len() {
-        let mut http_ranges = Vec::<ops::Range<usize>>::new();
-
-        for range in ranges.clone() {
-            debug!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
-            http_ranges.push(ops::Range{ start: range.start, end: range.end });
-        }
-
-        debug!("start multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
-               oss_config.url, oss_config.bucket_name,
-               oss_config.multi_ranges, http_ranges.clone());
-
-        let (datas, code) = rt.block_on(
-            bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone())).unwrap();
-        if code != 200 && code != 206 {
-            warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-            return Err(anyhow!("fail to read ranges {:?} from {}", obj_name, oss_config.url));
-        }
-
-        debug!("done multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
-               oss_config.url, oss_config.bucket_name,
-               oss_config.multi_ranges, http_ranges.clone());
-
-        for _i in 0..datas.len() {
-            sizes.push(Ok(0));
-        }
-
-        for (i, data) in datas.iter().enumerate() {
-            let mut buf_start = 0;
-            let mut buf_end = 0;
-            let mut found = false;
-
-            for range in ranges.clone() {
-                if range.start == data.range.start &&
-                    range.buf_end - range.buf_start <= data.data.len() {
-                    buf_start = range.buf_start;
-                    buf_end = range.buf_end;
-                    found = true;
-                    break;
+    let endpoints: Vec<&str> = oss_config.endpoints.as_str().split(",").collect();
+    debug!("read_ranges_from_oss for {:?}", oss_config.endpoints);
+    
+    let mut succ = false;
+'outer: for url in endpoints.clone() {
+            // clear the prev data
+            sizes.clear();
+            let region = Region::Custom {
+                region: oss_config.region.clone(),
+                endpoint: url.to_string().clone(),
+            };
+            let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
+            let mut rt = Runtime::new()?;
+        
+            if oss_config.multi_ranges && 1 < ranges_len {
+                let mut http_ranges = Vec::<ops::Range<usize>>::new();
+                
+                for range in ranges.clone().iter() {
+                    debug!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
+                    http_ranges.push(ops::Range{ start: range.start, end: range.end });
                 }
-            }
+        
+                debug!("start multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
+                    url.to_string().clone(), oss_config.bucket_name,
+                oss_config.multi_ranges, http_ranges.clone());
+    
+                let (datas, code) = match rt.block_on(
+                    bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone())){
+                        Ok(info)=>info,
+                        Err(e)=>{
+                            warn!("get object multi range from {} error {}", url.to_string().clone(), &e);
+                            continue 'outer;
+                        }
+                    };
+                if code != 200 && code != 206 {
+                    warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                    continue 'outer;
+                }
+        
+                debug!("done multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
+                    url.to_string().clone(), oss_config.bucket_name,
+                    oss_config.multi_ranges, http_ranges.clone());
+        
+                for _i in 0..datas.len() {
+                    sizes.push(Ok(0));
+                }
 
-            if !found {
-                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-                return Err(anyhow!("fail to find ranges {:?} from {}", obj_name, oss_config.url));
+                for (i, data) in datas.iter().enumerate() {
+                    let mut buf_start = 0;
+                    let mut buf_end = 0;
+                    let mut found = false;
+        
+                    for range in ranges.clone() {
+                        if range.start == data.range.start &&
+                            range.buf_end - range.buf_start <= data.data.len() {
+                            buf_start = range.buf_start;
+                            buf_end = range.buf_end;
+                            found = true;
+                            break;
+                        }
+                    }
+        
+                    if !found {
+                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                        continue 'outer;
+                    }
+        
+                    if data.data.len() == 0 {
+                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                        continue 'outer;
+                    }
+        
+                    debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
+                    buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
+                    sizes[i] = Ok(buf_end - buf_start);
+                }
+                succ = true;
+                break;
+            } else {
+                for range in ranges.clone() {
+                    debug!("start read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+                    let (data, code) = match rt.block_on(
+                        bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))){
+                            Ok(info)=>info,
+                            Err(e)=>{
+                                warn!("get object range from {} error {}",url.to_string().clone(), &e);
+                                continue 'outer;        
+                            }
+                        };
+                    if code != 200 && code != 206 {
+                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                        continue 'outer;
+                    }
+                    debug!("done read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
+                    buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
+                    sizes.push(Ok(range.end - range.start));
+                }
+                succ = true;
+                break;
             }
-
-            if data.data.len() == 0 {
-                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-                return Err(anyhow!("fail to find ranges buf {:?} from {}", obj_name, oss_config.url));
-            }
-
-            debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
-            buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
-            sizes[i] = Ok(buf_end - buf_start);
         }
-    } else {
-        for range in ranges {
-            debug!("start read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-            let (data, code) = rt.block_on(
-                bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))).unwrap();
-            if code != 200 && code != 206 {
-                warn!("Cannot get {:?} from {}", obj_name, oss_config.url);
-                sizes.push(Err(anyhow!("cannot get file")));
-                continue;
-            }
-            debug!("done read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-            buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
-            sizes.push(Ok(range.end - range.start));
-        }
+    if succ {
+        Ok(sizes)
+    }else{
+        Err(anyhow!("read_ranges_from_oss cannot read info from all endpoints {:?}", endpoints.clone()))
     }
-    Ok(sizes)
 }
 
 impl ExternalReader<std::fs::File> {
@@ -277,7 +331,7 @@ const DEFAULT_STORE_CONFIG_DATA_VERSION: u32 = StoreConfigDataVersion::Two as u3
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StoreOssConfig {
-    pub url: String,
+    pub endpoints: String,
     pub landed_dir: PathBuf,
     pub access_key: String,
     pub secret_key: String,

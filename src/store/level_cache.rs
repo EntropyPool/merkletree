@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, time};
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::{copy, Read, Seek, SeekFrom};
 use std::iter::FromIterator;
@@ -31,7 +31,7 @@ use s3::creds::Credentials;
 use s3::region::Region;
 use tokio::runtime::Runtime;
 
-use log::{debug, error};
+use log::{debug, error, warn};
 
 /// The LevelCacheStore is used to reduce the on-disk footprint even
 /// further to the minimum at the cost of build time performance.
@@ -289,45 +289,65 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
             Some(&config.oss_config.access_key),
             Some(&config.oss_config.secret_key),
             None, None, None)?;
-        let region = Region::Custom {
-            region: config.oss_config.region.clone(),
-            endpoint: config.oss_config.url.clone(),
-        };
-        let bucket = Bucket::new_with_path_style(&config.oss_config.bucket_name, region, credentials)?;
-        let mut rt = Runtime::new()?;
 
-        let (head_result, code) = rt.block_on(bucket.head_object(obj_name.to_str().unwrap())).unwrap();
-        ensure!(code == 200, "Cannot head {:?} from {}", obj_name, config.oss_config.url);
+        let endpoints: Vec<&str> = config.oss_config.endpoints.as_str().split(",").collect();
+        
+        debug!("new_from_oss for {:?}", config.oss_config.endpoints);
 
-        let store_size = head_result.content_length.expect("content length in head must exist");
+        for url in endpoints.clone() {
+            let region = Region::Custom {
+                region: config.oss_config.region.clone(),
+                endpoint: url.to_string().clone(),
+            };
 
-        let size = get_merkle_tree_leafs(store_range, branches)?;
-        ensure!(
-            size == next_pow2(size),
-            "Inconsistent merkle tree row_count detected"
-        );
+            let bucket = Bucket::new_with_path_style(&config.oss_config.bucket_name, region,time::Duration::from_secs(5), credentials.clone())?;
+            let mut rt = Runtime::new()?;
+    
+            let (head_result, code)= match rt.block_on(bucket.head_object(obj_name.to_str().unwrap())){
+                Ok(info)=> info,
+                Err(e)=> {
+                    warn!("new from oss head object from {} error {}",url.to_string().clone(), e);
+                    continue;
+                }
+            };
+            
+            if code != 200 {
+                warn!("Cannot get {:?} from {}, ret code {}", obj_name, url.to_string().clone(), code);
+                continue;
+            }
+            
+            let store_size = head_result.content_length.expect("content length in head must exist");
+    
+            let size = get_merkle_tree_leafs(store_range, branches)?;
+            ensure!(
+                size == next_pow2(size),
+                "Inconsistent merkle tree row_count detected"
+            );
+    
+            let store_range = store_range * E::byte_len();
+    
+            let cache_size =
+                get_merkle_tree_cache_size(size, branches, config.rows_to_discard)? * E::byte_len();
+            let cache_index_start = store_range - cache_size;
 
-        let store_range = store_range * E::byte_len();
+            return Ok(LevelCacheStore {
+                len: store_range / E::byte_len(),
+                elem_len: E::byte_len(),
+                file: tempfile().expect("cannot create temp file"),
+                data_width: size,
+                cache_index_start,
+                loaded_from_disk: true,
+                store_size: store_size as usize,
+                reader: None,
+                oss: true,
+                oss_config: config.oss_config.clone(),
+                path,
+                data_path: data_path,
+                _e: Default::default(),
+            });
+        }
 
-        let cache_size =
-            get_merkle_tree_cache_size(size, branches, config.rows_to_discard)? * E::byte_len();
-        let cache_index_start = store_range - cache_size;
-
-        Ok(LevelCacheStore {
-            len: store_range / E::byte_len(),
-            elem_len: E::byte_len(),
-            file: tempfile().expect("cannot create temp file"),
-            data_width: size,
-            cache_index_start,
-            loaded_from_disk: true,
-            store_size: store_size as usize,
-            reader: None,
-            oss: true,
-            oss_config: config.oss_config.clone(),
-            path,
-            data_path: data_path,
-            _e: Default::default(),
-        })
+        return Err(anyhow!("fail to find ranges buf {:?} from all endpoints {:?}", obj_name, endpoints.clone()));
     }
 
     // Used for opening v1 compacted DiskStores.
