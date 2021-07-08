@@ -103,7 +103,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
         None, None, None)?;
 
     debug!("read from oss: endpoints {:?}", oss_config.endpoints);
-    
+
     let mut succ = false;
     let endpoints: Vec<&str> = oss_config.endpoints.as_str().split(",").collect();
     for url in endpoints.clone() {
@@ -115,7 +115,7 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
 
         let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
         let mut rt = Runtime::new()?;
-    
+
         debug!("start read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
         let (data, code) = match rt.block_on(
             bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))){
@@ -136,9 +136,9 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
         // success
         break;
     }
-    
+
     if succ {
-        Ok(end - start)    
+        Ok(end - start)
     }else{
         Err(anyhow!("read_from_oss cannot read info from all endpoints {:?}", endpoints.clone()))
     }
@@ -155,7 +155,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
     let mut sizes = Vec::new();
     let endpoints: Vec<&str> = oss_config.endpoints.as_str().split(",").collect();
     debug!("read_ranges_from_oss for {:?}", oss_config.endpoints);
-    
+
     let mut succ = false;
 'outer: for url in endpoints.clone() {
             // clear the prev data
@@ -166,19 +166,19 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
             };
             let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
             let mut rt = Runtime::new()?;
-        
+
             if oss_config.multi_ranges && 1 < ranges_len {
                 let mut http_ranges = Vec::<ops::Range<usize>>::new();
-                
+
                 for range in ranges.clone().iter() {
                     debug!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
                     http_ranges.push(ops::Range{ start: range.start, end: range.end });
                 }
-        
+
                 debug!("start multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
                     url.to_string().clone(), oss_config.bucket_name,
                 oss_config.multi_ranges, http_ranges.clone());
-    
+
                 let (datas, code) = match rt.block_on(
                     bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone())){
                         Ok(info)=>info,
@@ -191,11 +191,11 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                     warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
                     continue 'outer;
                 }
-        
+
                 debug!("done multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
                     url.to_string().clone(), oss_config.bucket_name,
                     oss_config.multi_ranges, http_ranges.clone());
-        
+
                 for _i in 0..datas.len() {
                     sizes.push(Ok(0));
                 }
@@ -204,7 +204,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                     let mut buf_start = 0;
                     let mut buf_end = 0;
                     let mut found = false;
-        
+
                     for range in ranges.clone() {
                         if range.start == data.range.start &&
                             range.buf_end - range.buf_start <= data.data.len() {
@@ -214,17 +214,17 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                             break;
                         }
                     }
-        
+
                     if !found {
                         warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
                         continue 'outer;
                     }
-        
+
                     if data.data.len() == 0 {
                         warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
                         continue 'outer;
                     }
-        
+
                     debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
                     buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
                     sizes[i] = Ok(buf_end - buf_start);
@@ -239,7 +239,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                             Ok(info)=>info,
                             Err(e)=>{
                                 warn!("get object range from {} error {}",url.to_string().clone(), &e);
-                                continue 'outer;        
+                                continue 'outer;
                             }
                         };
                     if code != 200 && code != 206 {
