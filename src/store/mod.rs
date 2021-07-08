@@ -196,22 +196,21 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                     url.to_string().clone(), oss_config.bucket_name,
                     oss_config.multi_ranges, http_ranges.clone());
 
-                for _i in 0..datas.len() {
-                    sizes.push(Ok(0));
-                }
-
                 for (i, data) in datas.iter().enumerate() {
-                    let mut buf_start = 0;
-                    let mut buf_end = 0;
                     let mut found = false;
+
+                    if data.data.len() == 0 {
+                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                        continue 'outer;
+                    }
 
                     for range in ranges.clone() {
                         if range.start == data.range.start &&
                             range.buf_end - range.buf_start <= data.data.len() {
-                            buf_start = range.buf_start;
-                            buf_end = range.buf_end;
                             found = true;
-                            break;
+                            debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, range.buf_start, range.buf_end, obj_name);
+                            buf[range.buf_start..range.buf_end].copy_from_slice(&data.data[0..range.buf_end - range.buf_start]);
+                            sizes.push(Ok(range.end - range.start));
                         }
                     }
 
@@ -219,15 +218,6 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                         warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
                         continue 'outer;
                     }
-
-                    if data.data.len() == 0 {
-                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
-                        continue 'outer;
-                    }
-
-                    debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, buf_start, buf_end, obj_name);
-                    buf[buf_start..buf_end].copy_from_slice(&data.data[0..buf_end - buf_start]);
-                    sizes[i] = Ok(buf_end - buf_start);
                 }
                 succ = true;
                 break;
