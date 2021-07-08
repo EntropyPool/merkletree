@@ -188,7 +188,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                         }
                     };
                 if code != 200 && code != 206 {
-                    warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                    warn!("Cannot get {:?} from {} code {}", obj_name, url.to_string().clone(), code);
                     continue 'outer;
                 }
 
@@ -233,7 +233,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                             }
                         };
                     if code != 200 && code != 206 {
-                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                        warn!("Cannot get {:?} from {} code {}", obj_name, url.to_string().clone(), code);
                         continue 'outer;
                     }
                     debug!("done read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
