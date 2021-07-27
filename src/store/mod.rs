@@ -183,7 +183,7 @@ pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, os
                     bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone())){
                         Ok(info)=>info,
                         Err(e)=>{
-                            warn!("get object multi range from {} error {}", url.to_string().clone(), &e);
+                            warn!("get object {:?} multi range from {} error {}", obj_name, url.to_string().clone(), &e);
                             continue 'outer;
                         }
                     };
