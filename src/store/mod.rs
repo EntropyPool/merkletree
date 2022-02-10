@@ -1,4 +1,3 @@
-use std::time;
 use std::fmt;
 use std::fs::OpenOptions;
 use std::io::Read;
@@ -6,6 +5,7 @@ use std::iter::FromIterator;
 use std::ops;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::time;
 
 use anyhow::Result;
 use positioned_io::ReadAt;
@@ -15,7 +15,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use typenum::marker_traits::Unsigned;
 
-use log::{warn, debug};
+use log::{debug, warn};
 use tempfile::tempfile;
 
 use crate::hash::Algorithm;
@@ -63,15 +63,35 @@ pub struct ExternalReader<R: Read + Send + Sync> {
     pub offset: usize,
     pub source: R,
     pub path: String,
-    pub read_fn: fn(start: usize, end: usize, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<usize>,
-    pub read_ranges: fn(ranges: Vec<Range>, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>>,
+    pub read_fn: fn(
+        start: usize,
+        end: usize,
+        buf: &mut [u8],
+        path: String,
+        oss: bool,
+        oss_config: &StoreOssConfig,
+    ) -> Result<usize>,
+    pub read_ranges: fn(
+        ranges: Vec<Range>,
+        buf: &mut [u8],
+        path: String,
+        oss: bool,
+        oss_config: &StoreOssConfig,
+    ) -> Result<Vec<Result<usize>>>,
     pub oss: bool,
     pub oss_config: StoreOssConfig,
 }
 
 impl<R: Read + Send + Sync> ExternalReader<R> {
     pub fn read(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<usize> {
-        (self.read_fn)(start + self.offset, end + self.offset, buf, self.path.clone(), self.oss, &self.oss_config)
+        (self.read_fn)(
+            start + self.offset,
+            end + self.offset,
+            buf,
+            self.path.clone(),
+            self.oss,
+            &self.oss_config,
+        )
     }
     pub fn read_ranges(&self, ranges: Vec<Range>, buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
         let mut off_ranges = Vec::new();
@@ -84,23 +104,42 @@ impl<R: Read + Send + Sync> ExternalReader<R> {
                 buf_start: range.buf_start,
                 buf_end: range.buf_end,
             });
-            debug!("reader read ranges {}-{} | {} | {}",
-                   range.start,
-                   range.end,
-                   self.offset,
-                   self.path.clone());
+            debug!(
+                "reader read ranges {}-{} | {} | {}",
+                range.start,
+                range.end,
+                self.offset,
+                self.path.clone()
+            );
         }
-        (self.read_ranges)(off_ranges, buf, self.path.clone(), self.oss, &self.oss_config)
+        (self.read_ranges)(
+            off_ranges,
+            buf,
+            self.path.clone(),
+            self.oss,
+            &self.oss_config,
+        )
     }
 }
 
-pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<usize> {
+pub fn read_from_oss(
+    start: usize,
+    end: usize,
+    buf: &mut [u8],
+    path: String,
+    oss_config: &StoreOssConfig,
+) -> Result<usize> {
     let path_buf = PathBuf::from(path);
-    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+    let obj_name = path_buf
+        .strip_prefix(oss_config.landed_dir.clone())
+        .unwrap();
     let credentials = Credentials::new(
         Some(&oss_config.access_key),
         Some(&oss_config.secret_key),
-        None, None, None)?;
+        None,
+        None,
+        None,
+    )?;
 
     debug!("read from oss: endpoints {:?}", oss_config.endpoints);
 
@@ -113,21 +152,43 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
             endpoint: url.to_string().clone(),
         };
 
-        let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
+        let bucket = Bucket::new_with_path_style(
+            &oss_config.bucket_name,
+            region,
+            time::Duration::from_secs(5),
+            credentials.clone(),
+        )?;
         let mut rt = Runtime::new()?;
 
-        debug!("start read from oss: start {}, end {}, path {:?}", start, end, obj_name.clone());
-        let (data, code) = match rt.block_on(
-            bucket.get_object_range(obj_name.to_str().unwrap(), start as u64, Some(end as u64))){
-                Ok(info)=>info,
-                Err(e)=>{
-                    warn!("get object range from {} error {}", url.to_string().clone(), &e);
-                    continue;
-                }
-            };
+        debug!(
+            "start read from oss: start {}, end {}, path {:?}",
+            start,
+            end,
+            obj_name.clone()
+        );
+        let (data, code) = match rt.block_on(bucket.get_object_range(
+            obj_name.to_str().unwrap(),
+            start as u64,
+            Some(end as u64),
+        )) {
+            Ok(info) => info,
+            Err(e) => {
+                warn!(
+                    "get object range from {} error {}",
+                    url.to_string().clone(),
+                    &e
+                );
+                continue;
+            }
+        };
         // ensure!(code == 200 || code == 206, "Cannot get {:?} from {}", obj_name, url);
         if code != 200 && code != 206 {
-            warn!( "Cannot get {:?} from {} ret code {}", obj_name, url.to_string().clone(), code);
+            warn!(
+                "Cannot get {:?} from {} ret code {}",
+                obj_name,
+                url.to_string().clone(),
+                code
+            );
             continue;
         }
 
@@ -139,115 +200,191 @@ pub fn read_from_oss(start: usize, end: usize, buf: &mut [u8], path: String, oss
 
     if succ {
         Ok(end - start)
-    }else{
-        Err(anyhow!("read_from_oss cannot read info from all endpoints {:?}", endpoints.clone()))
+    } else {
+        Err(anyhow!(
+            "read_from_oss cannot read info from all endpoints {:?}",
+            endpoints.clone()
+        ))
     }
 }
 
-pub fn read_ranges_from_oss(ranges: Vec<Range>, buf: &mut [u8], path: String, oss_config: &StoreOssConfig) -> Result<Vec<Result<usize>>> {
+pub fn read_ranges_from_oss(
+    ranges: Vec<Range>,
+    buf: &mut [u8],
+    path: String,
+    oss_config: &StoreOssConfig,
+) -> Result<Vec<Result<usize>>> {
     let ranges_len = ranges.clone().len();
     let path_buf = PathBuf::from(path);
-    let obj_name = path_buf.strip_prefix(oss_config.landed_dir.clone()).unwrap();
+    let obj_name = path_buf
+        .strip_prefix(oss_config.landed_dir.clone())
+        .unwrap();
     let credentials = Credentials::new(
         Some(&oss_config.access_key),
         Some(&oss_config.secret_key),
-        None, None, None)?;
+        None,
+        None,
+        None,
+    )?;
     let mut sizes = Vec::new();
     let endpoints: Vec<&str> = oss_config.endpoints.as_str().split(",").collect();
     debug!("read_ranges_from_oss for {:?}", oss_config.endpoints);
 
     let mut succ = false;
-'outer: for url in endpoints.clone() {
-            // clear the prev data
-            sizes.clear();
-            let region = Region::Custom {
-                region: oss_config.region.clone(),
-                endpoint: url.to_string().clone(),
-            };
-            let bucket = Bucket::new_with_path_style(&oss_config.bucket_name, region, time::Duration::from_secs(5), credentials.clone())?;
-            let mut rt = Runtime::new()?;
+    'outer: for url in endpoints.clone() {
+        // clear the prev data
+        sizes.clear();
+        let region = Region::Custom {
+            region: oss_config.region.clone(),
+            endpoint: url.to_string().clone(),
+        };
+        let bucket = Bucket::new_with_path_style(
+            &oss_config.bucket_name,
+            region,
+            time::Duration::from_secs(5),
+            credentials.clone(),
+        )?;
+        let mut rt = Runtime::new()?;
 
-            if oss_config.multi_ranges && 1 < ranges_len {
-                let mut http_ranges = Vec::<ops::Range<usize>>::new();
+        if oss_config.multi_ranges && 1 < ranges_len {
+            let mut http_ranges = Vec::<ops::Range<usize>>::new();
 
-                for range in ranges.clone().iter() {
-                    debug!("multi ranges to oss: {}-{} | {:?}", range.start, range.end, obj_name);
-                    http_ranges.push(ops::Range{ start: range.start, end: range.end });
+            for range in ranges.clone().iter() {
+                debug!(
+                    "multi ranges to oss: {}-{} | {:?}",
+                    range.start, range.end, obj_name
+                );
+                http_ranges.push(ops::Range {
+                    start: range.start,
+                    end: range.end,
+                });
+            }
+
+            debug!(
+                "start multi read from oss {:?}, {}/{} [{}] / {:?}",
+                obj_name,
+                url.to_string().clone(),
+                oss_config.bucket_name,
+                oss_config.multi_ranges,
+                http_ranges.clone()
+            );
+
+            let (datas, code) = match rt.block_on(
+                bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone()),
+            ) {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!(
+                        "get object {:?} multi range from {} error {}",
+                        obj_name,
+                        url.to_string().clone(),
+                        &e
+                    );
+                    continue 'outer;
                 }
+            };
+            if code != 200 && code != 206 {
+                warn!(
+                    "Cannot get {:?} from {} code {}",
+                    obj_name,
+                    url.to_string().clone(),
+                    code
+                );
+                continue 'outer;
+            }
 
-                debug!("start multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
-                    url.to_string().clone(), oss_config.bucket_name,
-                oss_config.multi_ranges, http_ranges.clone());
+            debug!(
+                "done multi read from oss {:?}, {}/{} [{}] / {:?}",
+                obj_name,
+                url.to_string().clone(),
+                oss_config.bucket_name,
+                oss_config.multi_ranges,
+                http_ranges.clone()
+            );
 
-                let (datas, code) = match rt.block_on(
-                    bucket.get_object_multi_ranges(obj_name.to_str().unwrap(), http_ranges.clone())){
-                        Ok(info)=>info,
-                        Err(e)=>{
-                            warn!("get object {:?} multi range from {} error {}", obj_name, url.to_string().clone(), &e);
-                            continue 'outer;
-                        }
-                    };
-                if code != 200 && code != 206 {
-                    warn!("Cannot get {:?} from {} code {}", obj_name, url.to_string().clone(), code);
+            for (_i, data) in datas.iter().enumerate() {
+                let mut found = false;
+
+                if data.data.len() == 0 {
+                    warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
                     continue 'outer;
                 }
 
-                debug!("done multi read from oss {:?}, {}/{} [{}] / {:?}", obj_name,
-                    url.to_string().clone(), oss_config.bucket_name,
-                    oss_config.multi_ranges, http_ranges.clone());
-
-                for (i, data) in datas.iter().enumerate() {
-                    let mut found = false;
-
-                    if data.data.len() == 0 {
-                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
-                        continue 'outer;
-                    }
-
-                    for range in ranges.clone() {
-                        if range.start == data.range.start &&
-                            range.buf_end - range.buf_start <= data.data.len() {
-                            found = true;
-                            debug!("multi ranges read: {} | {}-{} | {:?}", data.range.start, range.buf_start, range.buf_end, obj_name);
-                            buf[range.buf_start..range.buf_end].copy_from_slice(&data.data[0..range.buf_end - range.buf_start]);
-                            sizes.push(Ok(range.end - range.start));
-                        }
-                    }
-
-                    if !found {
-                        warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
-                        continue 'outer;
-                    }
-                }
-                succ = true;
-                break;
-            } else {
                 for range in ranges.clone() {
-                    debug!("start read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-                    let (data, code) = match rt.block_on(
-                        bucket.get_object_range(obj_name.to_str().unwrap(), range.start as u64, Some(range.end as u64))){
-                            Ok(info)=>info,
-                            Err(e)=>{
-                                warn!("get object range from {} error {}",url.to_string().clone(), &e);
-                                continue 'outer;
-                            }
-                        };
-                    if code != 200 && code != 206 {
-                        warn!("Cannot get {:?} from {} code {}", obj_name, url.to_string().clone(), code);
+                    if range.start == data.range.start
+                        && range.buf_end - range.buf_start <= data.data.len()
+                    {
+                        found = true;
+                        debug!(
+                            "multi ranges read: {} | {}-{} | {:?}",
+                            data.range.start, range.buf_start, range.buf_end, obj_name
+                        );
+                        buf[range.buf_start..range.buf_end]
+                            .copy_from_slice(&data.data[0..range.buf_end - range.buf_start]);
+                        sizes.push(Ok(range.end - range.start));
+                    }
+                }
+
+                if !found {
+                    warn!("Cannot get {:?} from {}", obj_name, url.to_string().clone());
+                    continue 'outer;
+                }
+            }
+            succ = true;
+            break;
+        } else {
+            for range in ranges.clone() {
+                debug!(
+                    "start read from oss: start {}, end {}, path {:?}",
+                    range.start,
+                    range.end,
+                    obj_name.clone()
+                );
+                let (data, code) = match rt.block_on(bucket.get_object_range(
+                    obj_name.to_str().unwrap(),
+                    range.start as u64,
+                    Some(range.end as u64),
+                )) {
+                    Ok(info) => info,
+                    Err(e) => {
+                        warn!(
+                            "get object range from {} error {}",
+                            url.to_string().clone(),
+                            &e
+                        );
                         continue 'outer;
                     }
-                    debug!("done read from oss: start {}, end {}, path {:?}", range.start, range.end, obj_name.clone());
-                    buf[range.buf_start..range.buf_end].copy_from_slice(&data[0..range.end - range.start]);
-                    sizes.push(Ok(range.end - range.start));
+                };
+                if code != 200 && code != 206 {
+                    warn!(
+                        "Cannot get {:?} from {} code {}",
+                        obj_name,
+                        url.to_string().clone(),
+                        code
+                    );
+                    continue 'outer;
                 }
-                succ = true;
-                break;
+                debug!(
+                    "done read from oss: start {}, end {}, path {:?}",
+                    range.start,
+                    range.end,
+                    obj_name.clone()
+                );
+                buf[range.buf_start..range.buf_end]
+                    .copy_from_slice(&data[0..range.end - range.start]);
+                sizes.push(Ok(range.end - range.start));
             }
+            succ = true;
+            break;
         }
+    }
     if succ {
         Ok(sizes)
-    }else{
-        Err(anyhow!("read_ranges_from_oss cannot read info from all endpoints {:?}", endpoints.clone()))
+    } else {
+        Err(anyhow!(
+            "read_ranges_from_oss cannot read info from all endpoints {:?}",
+            endpoints.clone()
+        ))
     }
 }
 
@@ -258,11 +395,19 @@ impl ExternalReader<std::fs::File> {
             source: tempfile()?,
             data_path: replica_config.path.clone(),
             path: replica_config.path.as_path().display().to_string(),
-            read_fn: |start, end, buf: &mut [u8], path: String, oss: bool, oss_config: &StoreOssConfig| {
+            read_fn: |start,
+                      end,
+                      buf: &mut [u8],
+                      path: String,
+                      oss: bool,
+                      oss_config: &StoreOssConfig| {
                 if oss {
                     read_from_oss(start, end, buf, path, oss_config)?;
                 } else {
-                    debug!("read from local: start {}, end {}, path {}", start, end, path);
+                    debug!(
+                        "read from local: start {}, end {}, path {}",
+                        start, end, path
+                    );
                     let reader = OpenOptions::new().read(true).open(&path)?;
                     reader.read_exact_at(start as u64, &mut buf[0..end - start])?;
                 }
@@ -275,12 +420,22 @@ impl ExternalReader<std::fs::File> {
                     let mut sizes = Vec::new();
                     debug!("multi read from local {} start", path);
                     for range in ranges {
-                        debug!("multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
-                               range.start, range.buf_start, range.end, range.buf_end,
-                               path, buf.len(), range.index);
+                        debug!(
+                            "multi read from local: start {} / {}, end {} / {}, path {} | {} | {}",
+                            range.start,
+                            range.buf_start,
+                            range.end,
+                            range.buf_end,
+                            path,
+                            buf.len(),
+                            range.index
+                        );
                         let reader = OpenOptions::new().read(true).open(&path)?;
                         let read_len = range.end - range.start;
-                        reader.read_exact_at(range.start as u64, &mut buf[range.buf_start..range.buf_end])?;
+                        reader.read_exact_at(
+                            range.start as u64,
+                            &mut buf[range.buf_start..range.buf_end],
+                        )?;
                         sizes.push(Ok(read_len));
                     }
                     debug!("multi read from local {} done", path);
@@ -349,7 +504,12 @@ impl ReplicaConfig {
         }
     }
 
-    pub fn new_with_oss_config<T: Into<PathBuf>>(path: T, offsets: Vec<usize>, oss: bool, oss_config: &StoreOssConfig) -> Self {
+    pub fn new_with_oss_config<T: Into<PathBuf>>(
+        path: T,
+        offsets: Vec<usize>,
+        oss: bool,
+        oss_config: &StoreOssConfig,
+    ) -> Self {
         ReplicaConfig {
             path: path.into(),
             offsets,
@@ -411,7 +571,13 @@ impl StoreConfig {
         }
     }
 
-    pub fn new_with_oss_config<T: Into<PathBuf>, S: Into<String>>(path: T, id: S, rows_to_discard: usize, oss: bool, oss_config: &StoreOssConfig) -> Self {
+    pub fn new_with_oss_config<T: Into<PathBuf>, S: Into<String>>(
+        path: T,
+        id: S,
+        rows_to_discard: usize,
+        oss: bool,
+        oss_config: &StoreOssConfig,
+    ) -> Self {
         StoreConfig {
             path: path.into(),
             id: id.into(),
