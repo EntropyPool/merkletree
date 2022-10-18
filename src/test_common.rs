@@ -1,9 +1,17 @@
-use crate::hash::*;
+#![cfg(test)]
+#![cfg(not(tarpaulin_include))]
+
+use std::fmt;
+use std::fmt::{Debug, Formatter};
+use std::hash::Hasher;
+
+use crypto::digest::Digest;
+use crypto::sha2::Sha256;
+use typenum::marker_traits::Unsigned;
+
+use crate::hash::Algorithm;
 use crate::merkle::{Element, MerkleTree};
 use crate::store::VecStore;
-use std::fmt;
-use std::hash::Hasher;
-use typenum::marker_traits::Unsigned;
 
 pub const SIZE: usize = 0x10;
 
@@ -19,6 +27,9 @@ pub struct XOR128 {
     i: usize,
 }
 
+/// Implementation of XOR128 Hasher
+///
+/// It is used for testing purposes
 impl XOR128 {
     pub fn new() -> XOR128 {
         XOR128 {
@@ -37,7 +48,9 @@ impl Hasher for XOR128 {
     }
 
     fn finish(&self) -> u64 {
-        unimplemented!()
+        unimplemented!(
+            "Hasher's contract (finish function is not used) is deliberately broken by design"
+        )
     }
 }
 
@@ -50,22 +63,6 @@ impl Algorithm<Item> for XOR128 {
     #[inline]
     fn reset(&mut self) {
         *self = XOR128::new();
-    }
-}
-
-impl fmt::UpperHex for XOR128 {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if f.alternate() {
-            if let Err(e) = f.write_str("0x") {
-                return Err(e);
-            }
-        }
-        for b in self.data.as_ref() {
-            if let Err(e) = write!(f, "{:02X}", b) {
-                return Err(e);
-            }
-        }
-        Ok(())
     }
 }
 
@@ -86,9 +83,66 @@ impl Element for [u8; 16] {
     }
 }
 
-pub fn get_vec_tree_from_slice<U: Unsigned>(
+/// Implementation of SHA-256 Hasher
+///
+/// It is used for testing purposes
+#[derive(Copy, Clone)]
+pub struct Sha256Hasher {
+    engine: Sha256,
+}
+
+impl Sha256Hasher {
+    pub fn new() -> Sha256Hasher {
+        Sha256Hasher {
+            engine: Sha256::new(),
+        }
+    }
+}
+
+impl Debug for Sha256Hasher {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        f.write_str("Sha256Hasher")
+    }
+}
+
+impl Default for Sha256Hasher {
+    fn default() -> Self {
+        Sha256Hasher::new()
+    }
+}
+
+impl Hasher for Sha256Hasher {
+    // FIXME: contract is broken by design
+    fn finish(&self) -> u64 {
+        unimplemented!(
+            "Hasher's contract (finish function is not used) is deliberately broken by design"
+        )
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        self.engine.input(bytes)
+    }
+}
+
+impl Algorithm<Item> for Sha256Hasher {
+    fn hash(&mut self) -> Item {
+        let mut result: Item = Item::default();
+        let item_size = result.len();
+        let mut hash_output = vec![0u8; self.engine.output_bytes()];
+        self.engine.result(&mut hash_output);
+        self.engine.reset();
+        if item_size < hash_output.len() {
+            result.copy_from_slice(&hash_output.as_slice()[0..item_size]);
+        } else {
+            result.copy_from_slice(&hash_output.as_slice())
+        }
+        result
+    }
+}
+
+pub fn get_vec_tree_from_slice<E: Element, A: Algorithm<E>, U: Unsigned>(
     leafs: usize,
-) -> MerkleTree<Item, XOR128, VecStore<Item>, U> {
+) -> MerkleTree<E, A, VecStore<E>, U> {
     let mut x = Vec::with_capacity(leafs);
     for i in 0..leafs {
         x.push(i * 93);

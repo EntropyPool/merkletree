@@ -99,7 +99,7 @@ impl<E: Element, R: Read + Send + Sync> LevelCacheStore<E, R> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
         let path = data_path.as_path().display().to_string();
 
-        let file = File::open(data_path.clone())?;
+        let file = OpenOptions::new().write(true).read(true).open(data_path.clone())?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
@@ -355,10 +355,7 @@ impl<E: Element, R: Read + Send + Sync> Store<E> for LevelCacheStore<E, R> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
         let path = data_path.as_path().display().to_string();
 
-        let file = OpenOptions::new()
-            .write(true)
-            .read(true)
-            .open(data_path.clone())?;
+        let file = OpenOptions::new().write(true).read(true).open(data_path.clone())?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 

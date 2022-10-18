@@ -528,9 +528,8 @@ impl<
             is_merkle_tree_size_valid(leafs, branches),
             "MerkleTree size is invalid given the arity"
         );
-
         let store = S::new_from_slice(tree_len, &data).context("failed to create data store")?;
-        let root = store.read_at(data.len() - 1)?;
+        let root = store.read_at(store.len() - 1)?;
 
         Ok(MerkleTree {
             data: Data::BaseTree(store),
@@ -576,7 +575,7 @@ impl<
 
         let store = S::new_from_slice_with_config(tree_len, branches, &data, config)
             .context("failed to create data store")?;
-        let root = store.read_at(data.len() - 1)?;
+        let root = store.read_at(store.len() - 1)?;
 
         Ok(MerkleTree {
             data: Data::BaseTree(store),
@@ -738,22 +737,23 @@ impl<
             "All passed in trees must have the same length"
         );
 
-        let sub_tree_count = TopTreeArity::to_usize();
-        let top_layer_nodes = sub_tree_count * SubTreeArity::to_usize();
+        let top_tree_arity = TopTreeArity::to_usize();
+        let sub_tree_arity = SubTreeArity::to_usize();
+        let top_layer_nodes = top_tree_arity * sub_tree_arity;
         ensure!(
             trees.len() == top_layer_nodes,
             "Length of trees MUST equal the number of top layer nodes"
         );
 
         // Group the trees appropriately into sub-tree ready vectors.
-        let mut grouped_trees = Vec::with_capacity(sub_tree_count);
-        for _ in (0..sub_tree_count).step_by(trees.len() / sub_tree_count) {
-            grouped_trees.push(trees.split_off(trees.len() / sub_tree_count));
+        let mut grouped_trees = Vec::with_capacity(top_tree_arity);
+        for _ in 0..top_tree_arity {
+            grouped_trees.push(trees.split_off(trees.len() - sub_tree_arity));
         }
-        grouped_trees.insert(0, trees);
+        grouped_trees.reverse();
 
         let mut sub_trees: Vec<MerkleTree<E, A, S, BaseTreeArity, SubTreeArity>> =
-            Vec::with_capacity(sub_tree_count);
+            Vec::with_capacity(top_tree_arity);
         for group in grouped_trees {
             sub_trees.push(MerkleTree::from_trees(group)?);
         }
@@ -3036,6 +3036,34 @@ impl Element for [u8; 32] {
     }
 }
 
+/// This function calculates length of the generic tree by taking values from arity parameters.
+/// E.g. it can be used for base / compound / compound-compound trees.
+pub fn get_merkle_tree_len_generic<
+    BaseTreeArity: Unsigned,
+    SubTreeArity: Unsigned,
+    TopTreeArity: Unsigned,
+>(
+    leaves: usize,
+) -> Result<usize> {
+    let top_tree_arity = TopTreeArity::to_usize();
+    let sub_tree_arity = SubTreeArity::to_usize();
+    let base_tree_arity = BaseTreeArity::to_usize();
+
+    let base_tree_len = get_merkle_tree_len(leaves, base_tree_arity)?;
+
+    if top_tree_arity > 0 {
+        return Ok(1 + top_tree_arity + sub_tree_arity * top_tree_arity * base_tree_len);
+    }
+
+    if sub_tree_arity > 0 {
+        return Ok(1 + sub_tree_arity * base_tree_len);
+    }
+
+    Ok(base_tree_len)
+}
+
+/// FIXME: Ideally this function should be replaced with 'get_merkle_tree_len_generic' defined above,
+/// since it considers compound and compound-compound trees
 // Tree length calculation given the number of leafs in the tree and the branches.
 pub fn get_merkle_tree_len(leafs: usize, branches: usize) -> Result<usize> {
     ensure!(leafs >= branches, "leaf and branch mis-match");
@@ -3257,74 +3285,106 @@ where
     Ok(())
 }
 
-#[test]
-fn test_get_merkle_tree_methods() {
-    assert!(get_merkle_tree_len(16, 4).is_ok());
-    assert!(get_merkle_tree_len(3, 1).is_ok());
+#[cfg(test)]
+mod tests {
+    use crate::merkle::{
+        get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len,
+        get_merkle_tree_len_generic,
+    };
+    use crate::store::StoreConfig;
+    use typenum::{U0, U1, U11, U16, U2, U4};
 
-    assert!(get_merkle_tree_len(0, 0).is_err());
-    assert!(get_merkle_tree_len(1, 0).is_err());
-    assert!(get_merkle_tree_len(1, 2).is_err());
-    assert!(get_merkle_tree_len(4, 16).is_err());
-    assert!(get_merkle_tree_len(1024, 11).is_err());
+    #[test]
+    fn test_get_merkle_tree_methods() {
+        assert!(get_merkle_tree_len(16, 4).is_ok());
+        assert!(get_merkle_tree_len(3, 1).is_ok());
 
-    assert!(get_merkle_tree_leafs(31, 2).is_ok());
-    assert!(get_merkle_tree_leafs(15, 2).is_ok());
-    assert!(get_merkle_tree_leafs(127, 2).is_ok());
+        assert!(get_merkle_tree_len(0, 0).is_err());
+        assert!(get_merkle_tree_len(1, 0).is_err());
+        assert!(get_merkle_tree_len(1, 2).is_err());
+        assert!(get_merkle_tree_len(4, 16).is_err());
+        assert!(get_merkle_tree_len(1024, 11).is_err());
 
-    assert!(get_merkle_tree_leafs(1398101, 4).is_ok());
-    assert!(get_merkle_tree_leafs(299593, 8).is_ok());
+        assert!(get_merkle_tree_len_generic::<U4, U0, U0>(16).is_ok());
+        assert!(get_merkle_tree_len_generic::<U1, U0, U0>(3).is_ok());
 
-    assert!(get_merkle_tree_leafs(32, 2).is_err());
-    assert!(get_merkle_tree_leafs(16, 2).is_err());
-    assert!(get_merkle_tree_leafs(128, 2).is_err());
+        assert!(get_merkle_tree_len_generic::<U0, U0, U0>(0).is_err());
+        assert!(get_merkle_tree_len_generic::<U0, U0, U0>(1).is_err());
+        assert!(get_merkle_tree_len_generic::<U2, U0, U0>(1).is_err());
+        assert!(get_merkle_tree_len_generic::<U16, U0, U0>(4).is_err());
+        assert!(get_merkle_tree_len_generic::<U11, U0, U0>(1024).is_err());
 
-    assert!(get_merkle_tree_leafs(32, 8).is_err());
-    assert!(get_merkle_tree_leafs(16, 8).is_err());
-    assert!(get_merkle_tree_leafs(128, 8).is_err());
+        assert_eq!(
+            get_merkle_tree_len_generic::<U2, U0, U0>(16).unwrap(),
+            16 + 8 + 4 + 2 + 1
+        );
+        assert_eq!(
+            get_merkle_tree_len_generic::<U2, U4, U0>(16).unwrap(),
+            (16 + 8 + 4 + 2 + 1) * 4 + 1
+        );
+        assert_eq!(
+            get_merkle_tree_len_generic::<U2, U4, U2>(16).unwrap(),
+            ((16 + 8 + 4 + 2 + 1) * 4 + 1) * 2 + 1
+        );
 
-    assert!(get_merkle_tree_leafs(1398102, 4).is_err());
-    assert!(get_merkle_tree_leafs(299594, 8).is_err());
+        assert!(get_merkle_tree_leafs(31, 2).is_ok());
+        assert!(get_merkle_tree_leafs(15, 2).is_ok());
+        assert!(get_merkle_tree_leafs(127, 2).is_ok());
 
-    let mib = 1024 * 1024;
-    let gib = 1024 * mib;
+        assert!(get_merkle_tree_leafs(1398101, 4).is_ok());
+        assert!(get_merkle_tree_leafs(299593, 8).is_ok());
 
-    // 32 GiB octree cache size sanity checking
-    let leafs = 32 * gib / 32;
-    let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
-    let tree_size = get_merkle_tree_len(leafs, 8).expect("");
-    let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
-    assert_eq!(leafs, 1073741824);
-    assert_eq!(tree_size, 1227133513);
-    assert_eq!(rows_to_discard, 2);
-    assert_eq!(cache_size, 2396745);
-    // Note: Values for when the default was 3
-    //assert_eq!(rows_to_discard, 3);
-    //assert_eq!(cache_size, 299593);
+        assert!(get_merkle_tree_leafs(32, 2).is_err());
+        assert!(get_merkle_tree_leafs(16, 2).is_err());
+        assert!(get_merkle_tree_leafs(128, 2).is_err());
 
-    // 4 GiB octree cache size sanity checking
-    let leafs = 4 * gib / 32;
-    let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
-    let tree_size = get_merkle_tree_len(leafs, 8).expect("");
-    let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
-    assert_eq!(leafs, 134217728);
-    assert_eq!(tree_size, 153391689);
-    assert_eq!(rows_to_discard, 2);
-    assert_eq!(cache_size, 299593);
-    // Note: Values for when the default was 3
-    //assert_eq!(rows_to_discard, 3);
-    //assert_eq!(cache_size, 37449);
+        assert!(get_merkle_tree_leafs(32, 8).is_err());
+        assert!(get_merkle_tree_leafs(16, 8).is_err());
+        assert!(get_merkle_tree_leafs(128, 8).is_err());
 
-    // 512 MiB octree cache size sanity checking
-    let leafs = 512 * mib / 32;
-    let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
-    let tree_size = get_merkle_tree_len(leafs, 8).expect("");
-    let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
-    assert_eq!(leafs, 16777216);
-    assert_eq!(tree_size, 19173961);
-    assert_eq!(rows_to_discard, 2);
-    assert_eq!(cache_size, 37449);
-    // Note: Values for when the default was 3
-    //assert_eq!(rows_to_discard, 3);
-    //assert_eq!(cache_size, 4681);
+        assert!(get_merkle_tree_leafs(1398102, 4).is_err());
+        assert!(get_merkle_tree_leafs(299594, 8).is_err());
+
+        let mib = 1024 * 1024;
+        let gib = 1024 * mib;
+
+        // 32 GiB octree cache size sanity checking
+        let leafs = 32 * gib / 32;
+        let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
+        let tree_size = get_merkle_tree_len(leafs, 8).expect("");
+        let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
+        assert_eq!(leafs, 1073741824);
+        assert_eq!(tree_size, 1227133513);
+        assert_eq!(rows_to_discard, 2);
+        assert_eq!(cache_size, 2396745);
+        // Note: Values for when the default was 3
+        //assert_eq!(rows_to_discard, 3);
+        //assert_eq!(cache_size, 299593);
+
+        // 4 GiB octree cache size sanity checking
+        let leafs = 4 * gib / 32;
+        let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
+        let tree_size = get_merkle_tree_len(leafs, 8).expect("");
+        let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
+        assert_eq!(leafs, 134217728);
+        assert_eq!(tree_size, 153391689);
+        assert_eq!(rows_to_discard, 2);
+        assert_eq!(cache_size, 299593);
+        // Note: Values for when the default was 3
+        //assert_eq!(rows_to_discard, 3);
+        //assert_eq!(cache_size, 37449);
+
+        // 512 MiB octree cache size sanity checking
+        let leafs = 512 * mib / 32;
+        let rows_to_discard = StoreConfig::default_rows_to_discard(leafs, 8);
+        let tree_size = get_merkle_tree_len(leafs, 8).expect("");
+        let cache_size = get_merkle_tree_cache_size(leafs, 8, rows_to_discard).expect("");
+        assert_eq!(leafs, 16777216);
+        assert_eq!(tree_size, 19173961);
+        assert_eq!(rows_to_discard, 2);
+        assert_eq!(cache_size, 37449);
+        // Note: Values for when the default was 3
+        //assert_eq!(rows_to_discard, 3);
+        //assert_eq!(cache_size, 4681);
+    }
 }

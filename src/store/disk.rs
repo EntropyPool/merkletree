@@ -19,7 +19,7 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES, Range};
+use crate::store::{Range, Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES};
 
 /// The Disk-only store is used to reduce memory to the minimum at the
 /// cost of build time performance. Most of its I/O logic is in the
@@ -561,13 +561,12 @@ impl<E: Element> DiskStore<E> {
         let read_data;
         unsafe {
             let mmap = MmapOptions::new()
-                .offset( start as u64 )
-                .len( read_len )
+                .offset(start as u64)
+                .len(read_len)
                 .map(&(self.file))
                 .expect("failed to map layer file");
             read_data = mmap.to_vec();
         };
-
 
         ensure!(read_data.len() == read_len, "Failed to read the full range");
         Ok(read_data)

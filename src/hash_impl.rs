@@ -1,7 +1,8 @@
-use crate::hash::Hashable;
 use std::hash::Hasher;
 use std::mem;
 use std::slice;
+
+use crate::hash::Hashable;
 
 macro_rules! impl_write {
     ($(($ty:ident, $meth:ident),)*) => {$(

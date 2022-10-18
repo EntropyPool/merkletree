@@ -66,11 +66,11 @@ impl<E: Element> Store<E> for MmapStore<E> {
 
         let file = tempfile::NamedTempFile::new()?;
         file.as_file().set_len(store_size as u64)?;
-        let (file, path) = file.into_parts();
+        let (file, _path) = file.into_parts();
         let map = unsafe { MmapMut::map_mut(&file)? };
 
         Ok(MmapStore {
-            path: path.keep()?,
+            path: _path.keep()?,
             map: Some(map),
             file,
             len: 0,
@@ -87,7 +87,7 @@ impl<E: Element> Store<E> for MmapStore<E> {
     fn new_from_disk(size: usize, _branches: usize, config: &StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
 
-        let file = File::open(&data_path)?;
+        let file = OpenOptions::new().write(true).read(true).open(&data_path)?;
         let metadata = file.metadata()?;
         let store_size = metadata.len() as usize;
 
