@@ -1,21 +1,23 @@
 use std::fs::{File, OpenOptions};
 use std::marker::PhantomData;
 use std::ops;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use log::error;
 use memmap2::MmapMut;
 
 use crate::merkle::Element;
-use crate::store::{Store, StoreConfig};
+use crate::store::{Store, StoreConfig, Range};
 
 /// Store that saves the data on disk, and accesses it using memmap.
 #[derive(Debug)]
 pub struct MmapStore<E: Element> {
+    path: PathBuf,
     map: Option<MmapMut>,
     file: File,
     len: usize,
+    store_size: usize,
     _e: PhantomData<E>,
 }
 
@@ -50,9 +52,11 @@ impl<E: Element> Store<E> for MmapStore<E> {
         let map = unsafe { MmapMut::map_mut(&file)? };
 
         Ok(MmapStore {
+            path: data_path,
             map: Some(map),
             file,
             len: 0,
+            store_size,
             _e: Default::default(),
         })
     }
@@ -67,11 +71,17 @@ impl<E: Element> Store<E> for MmapStore<E> {
         let map = unsafe { MmapMut::map_mut(&file)? };
 
         Ok(MmapStore {
+            path: _path.keep()?,
             map: Some(map),
             file,
             len: 0,
+            store_size,
             _e: Default::default(),
         })
+    }
+
+    fn new_from_oss(_store_range: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a MmapStore from oss");
     }
 
     #[allow(unsafe_code)]
@@ -104,9 +114,11 @@ impl<E: Element> Store<E> for MmapStore<E> {
         let map = unsafe { MmapMut::map_mut(&file)? };
 
         Ok(MmapStore {
+            path: data_path,
             map: Some(map),
             file,
             len: size,
+            store_size,
             _e: Default::default(),
         })
     }
@@ -230,6 +242,10 @@ impl<E: Element> Store<E> for MmapStore<E> {
         Ok(())
     }
 
+    fn read_ranges_into(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        unimplemented!("Not required here");
+    }
+
     fn read_range_into(&self, _start: usize, _end: usize, _buf: &mut [u8]) -> Result<()> {
         unimplemented!("Not required here");
     }
@@ -250,6 +266,18 @@ impl<E: Element> Store<E> for MmapStore<E> {
             .chunks(E::byte_len())
             .map(E::from_slice)
             .collect())
+    }
+
+    fn offset_by_range(&self, _range: Range) -> usize {
+        0
+    }
+
+    fn path_by_range(&self, _range: Range) -> Option<&PathBuf> {
+        Some(&self.path)
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        Some(&self.path)
     }
 
     fn len(&self) -> usize {

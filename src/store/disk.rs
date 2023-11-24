@@ -3,7 +3,7 @@ use std::io::{copy, Seek, SeekFrom};
 use std::iter::FromIterator;
 use std::marker::PhantomData;
 use std::ops;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result};
@@ -20,7 +20,7 @@ use crate::merkle::{
     get_merkle_tree_cache_size, get_merkle_tree_leafs, get_merkle_tree_len, log2_pow2, next_pow2,
     Element,
 };
-use crate::store::{Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES};
+use crate::store::{Range, Store, StoreConfig, StoreConfigDataVersion, BUILD_CHUNK_NODES};
 
 /// The Disk-only store is used to reduce memory to the minimum at the
 /// cost of build time performance. Most of its I/O logic is in the
@@ -41,11 +41,16 @@ pub struct DiskStore<E: Element> {
     // Not to be confused with `len`, this saves the total size of the `store`
     // in bytes and the other one keeps track of used `E` slots in the `DiskStore`.
     store_size: usize,
+
+    path: String,
+    data_path: PathBuf,
 }
 
 impl<E: Element> Store<E> for DiskStore<E> {
     fn new_with_config(size: usize, branches: usize, config: StoreConfig) -> Result<Self> {
         let data_path = StoreConfig::data_path(&config.path, &config.id);
+
+        let path = data_path.as_path().display().to_string();
 
         // If the specified file exists, load it from disk.
         if Path::new(&data_path).exists() {
@@ -57,7 +62,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .write(true)
             .read(true)
             .create_new(true)
-            .open(data_path)?;
+            .open(data_path.clone())?;
 
         let store_size = E::byte_len() * size;
         file.set_len(store_size as u64)?;
@@ -69,6 +74,8 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path,
+            data_path: data_path,
         })
     }
 
@@ -84,6 +91,8 @@ impl<E: Element> Store<E> for DiskStore<E> {
             file,
             loaded_from_disk: false,
             store_size,
+            path: "tmp".to_string(),
+            data_path: PathBuf::from("/tmp"),
         })
     }
 
@@ -125,6 +134,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
         store.len = data.len() / store.elem_len;
 
         Ok(store)
+    }
+
+    fn new_from_oss(_store_range: usize, _branches: usize, _config: &StoreConfig) -> Result<Self> {
+        unimplemented!("Cannot load a DiskStore from oss");
     }
 
     fn new_from_disk(size: usize, _branches: usize, config: &StoreConfig) -> Result<Self> {
@@ -172,6 +185,10 @@ impl<E: Element> Store<E> for DiskStore<E> {
         self.store_read_into(start, end, buf)
     }
 
+    fn read_ranges_into(&self, _ranges: Vec<Range>, _buf: &mut [u8]) -> Result<Vec<Result<usize>>> {
+        unimplemented!("Not required here");
+    }
+
     fn read_range_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
         let start = start * self.elem_len;
         let end = end * self.elem_len;
@@ -196,6 +213,18 @@ impl<E: Element> Store<E> for DiskStore<E> {
             .chunks(self.elem_len)
             .map(E::from_slice)
             .collect())
+    }
+
+    fn offset_by_range(&self, _range: Range) -> usize {
+        0
+    }
+
+    fn path_by_range(&self, _range: Range) -> Option<&PathBuf> {
+        Some(&self.data_path)
+    }
+
+    fn path(&self) -> Option<&PathBuf> {
+        Some(&self.data_path)
     }
 
     fn len(&self) -> usize {
@@ -442,6 +471,7 @@ impl<E: Element> Store<E> for DiskStore<E> {
 impl<E: Element> DiskStore<E> {
     pub fn new_from_disk_with_path<P: AsRef<Path>>(size: usize, data_path: P) -> Result<Self> {
         ensure!(data_path.as_ref().exists(), "[DiskStore] new_from_disk constructor can be used only for instantiating already existing storages");
+        let path = data_path.as_ref().display().to_string();
 
         let file = match OpenOptions::new().write(true).read(true).open(&data_path) {
             Ok(file) => file,
@@ -476,6 +506,8 @@ impl<E: Element> DiskStore<E> {
             file,
             loaded_from_disk: true,
             store_size,
+            path,
+            data_path: data_path.as_ref().to_path_buf(),
         })
     }
 
@@ -508,7 +540,6 @@ impl<E: Element> DiskStore<E> {
     pub fn store_read_range(&self, start: usize, end: usize) -> Result<Vec<u8>> {
         let read_len = end - start;
         let mut read_data = vec![0; read_len];
-
         self.file
             .read_exact_at(start as u64, &mut read_data)
             .with_context(|| {
@@ -523,6 +554,41 @@ impl<E: Element> DiskStore<E> {
         Ok(read_data)
     }
 
+    /////////////////////////////////////////////////////////////////////////
+
+    pub fn read_range_ex(&self, r: ops::Range<usize>) -> Result<Vec<E>> {
+        let start = r.start * self.elem_len;
+        let end = r.end * self.elem_len;
+
+        let len = self.len * self.elem_len;
+        ensure!(start < len, "start out of range {} >= {}", start, len);
+        ensure!(end <= len, "end out of range {} > {}", end, len);
+
+        Ok(self
+            .store_read_range_ex(start, end)?
+            .chunks(self.elem_len)
+            .map(E::from_slice)
+            .collect())
+    }
+
+    pub fn store_read_range_ex(&self, start: usize, end: usize) -> Result<Vec<u8>> {
+        let read_len = end - start;
+        //let mut read_data = vec![0; read_len];
+
+        let read_data;
+        unsafe {
+            let mmap = MmapOptions::new()
+                .offset(start as u64)
+                .len(read_len)
+                .map(&(self.file))
+                .expect("failed to map layer file");
+            read_data = mmap.to_vec();
+        };
+
+        ensure!(read_data.len() == read_len, "Failed to read the full range");
+        Ok(read_data)
+    }
+    /////////////////////////////////////////////////////////////////////////
     pub fn store_read_into(&self, start: usize, end: usize, buf: &mut [u8]) -> Result<()> {
         self.file
             .read_exact_at(start as u64, buf)
