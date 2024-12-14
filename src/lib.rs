@@ -69,7 +69,7 @@
 
 // missing_docs,
 #![deny(
-    unused_qualifications,
+    // unused_qualifications,
     missing_debug_implementations,
     missing_copy_implementations,
     trivial_casts,
